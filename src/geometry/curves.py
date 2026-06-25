@@ -209,8 +209,19 @@ class Curve:
 
 
 class InterpolatedLine(Curve):
-    def __init__(self, points: list[Point]):
+    def __init__(self, points: list[Point], params: list[float] | None = None):
+        """Interpolating spline through the given points.
+
+        Args:
+            points: Points the curve passes through, in order.
+            params: Optional explicit parameter value for each point (strictly
+                increasing). When given, ``point_at_parameter`` uses exactly
+                these values, so callers can pin known features (e.g. a leading
+                edge) to a chosen parameter. When omitted, SciPy's default
+                chord-length parameterization is used.
+        """
         self.points = points
+        self.params = params
 
         self.start = points[0]
         self.end = points[-1]
@@ -219,7 +230,10 @@ class InterpolatedLine(Curve):
         ys = [p.y for p in points]
         zs = [p.z for p in points]
         k = min(3, len(points) - 1)  # Spline degree
-        self.tck, _u = splprep([xs, ys, zs], s=0.0, k=k)
+        if params is not None:
+            self.tck, _u = splprep([xs, ys, zs], u=params, s=0.0, k=k)
+        else:
+            self.tck, _u = splprep([xs, ys, zs], s=0.0, k=k)
 
     def transform(self, position: Position) -> "InterpolatedLine":
         """Transform the line by transforming its defining points and re-splining.
@@ -230,7 +244,7 @@ class InterpolatedLine(Curve):
         points.
         """
         new_points = [position.point_in_global(p) for p in self.points]
-        return InterpolatedLine(points=new_points)
+        return InterpolatedLine(points=new_points, params=self.params)
 
 
 class TrimmedCurve(Curve):

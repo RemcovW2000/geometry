@@ -1,8 +1,9 @@
 import numpy as np
+from scipy.interpolate import make_interp_spline
 
 from geometry.errors import ConstructionError
 from geometry import Point
-from geometry.curves import InterpolatedLine
+from geometry.curves import Curve, InterpolatedLine
 
 
 class GordonPatch:
@@ -141,6 +142,176 @@ class GordonPatch:
             for j, v in enumerate(vs):
                 pt = self.point_at_parameter(u, v)
                 grid[i, j] = [pt.x, pt.y, pt.z]
+        return grid
+
+
+class GordonSurface:
+    """A Gordon surface interpolating a compatible network of curves.
+
+    The surface is the Boolean sum of three surfaces (Gordon 1969):
+
+        S(u, v) = S_u(u, v) + S_v(u, v) - T(u, v)
+
+    where:
+        - S_u: skinning surface interpolating all profile curves f_i(u)
+        - S_v: skinning surface interpolating all guide curves g_j(v)
+        - T:   tensor-product surface interpolating the grid of intersection
+               points P_ij = f_i(u_j) = g_j(v_i)
+
+    This is the strict (vector) variant: it requires the network to already be
+    *compatible*, i.e. every profile crosses guide ``j`` at the **same**
+    parameter ``u_j`` (shared across all profiles), and every guide crosses
+    profile ``i`` at the same parameter ``v_i`` (shared across all guides). No
+    reparameterization is performed; the input curves are evaluated by their own
+    ``point_at_parameter`` and are never re-fit, so the profiles and guides are
+    reproduced exactly.
+
+    With exactly 2 profiles and 2 guides (and the linear blending that results),
+    this reduces to :class:`GordonPatch`.
+
+    Args:
+        profiles: Profile curves f_i(u), ordered by increasing v position.
+        guides: Guide curves g_j(v), ordered by increasing u position.
+        profile_v_params: The v-parameter v_i of each profile (length M). Must be
+            strictly increasing with v_0 = 0 and v_{M-1} = 1.
+        guide_u_params: The u-parameter u_j of each guide (length N). Must be
+            strictly increasing with u_0 = 0 and u_{N-1} = 1.
+        tol: Tolerance for the compatibility check on intersection points.
+    """
+
+    def __init__(
+        self,
+        profiles: list[Curve],
+        guides: list[Curve],
+        profile_v_params: list[float],
+        guide_u_params: list[float],
+        tol: float = 1e-6,
+    ):
+        self.profiles = list(profiles)
+        self.guides = list(guides)
+        self.v_nodes = np.asarray(profile_v_params, dtype=float)
+        self.u_nodes = np.asarray(guide_u_params, dtype=float)
+        self.tol = tol
+
+        self._validate()
+
+        # Cross-interpolation degrees: linear for 2 curves, else up to cubic.
+        self._deg_v = min(3, len(self.profiles) - 1)
+        self._deg_u = min(3, len(self.guides) - 1)
+
+        # Grid of intersection points P[i, j] = f_i(u_j), shape (M, N, 3).
+        self._grid = self._build_grid()
+
+    @property
+    def n_profiles(self) -> int:
+        """Number of profile curves (M)."""
+        return len(self.profiles)
+
+    @property
+    def n_guides(self) -> int:
+        """Number of guide curves (N)."""
+        return len(self.guides)
+
+    def _validate(self) -> None:
+        """Validate counts, node parameters, and network compatibility."""
+        m, n = len(self.profiles), len(self.guides)
+        if m < 2:  # noqa: PLR2004
+            raise ConstructionError("GordonSurface requires at least 2 profile curves.")
+        if n < 2:  # noqa: PLR2004
+            raise ConstructionError("GordonSurface requires at least 2 guide curves.")
+        if len(self.v_nodes) != m:
+            raise ConstructionError(
+                f"profile_v_params length ({len(self.v_nodes)}) must equal "
+                f"the number of profiles ({m})."
+            )
+        if len(self.u_nodes) != n:
+            raise ConstructionError(
+                f"guide_u_params length ({len(self.u_nodes)}) must equal "
+                f"the number of guides ({n})."
+            )
+
+        self._check_nodes(self.v_nodes, "profile_v_params")
+        self._check_nodes(self.u_nodes, "guide_u_params")
+
+        self._check_compatibility()
+
+    @staticmethod
+    def _check_nodes(nodes: np.ndarray, name: str) -> None:
+        """Check that node parameters are strictly increasing and span [0, 1]."""
+        if not np.all(np.diff(nodes) > 0):
+            raise ConstructionError(f"{name} must be strictly increasing.")
+        if abs(nodes[0]) > 1e-9 or abs(nodes[-1] - 1.0) > 1e-9:  # noqa: PLR2004
+            raise ConstructionError(
+                f"{name} must start at 0 and end at 1 (got {nodes[0]} .. {nodes[-1]})."
+            )
+
+    def _check_compatibility(self) -> None:
+        """Verify f_i(u_j) coincides with g_j(v_i) for every (i, j) within tol."""
+        for i, profile in enumerate(self.profiles):
+            for j, guide in enumerate(self.guides):
+                p_profile = profile.point_at_parameter(float(self.u_nodes[j])).as_array()
+                p_guide = guide.point_at_parameter(float(self.v_nodes[i])).as_array()
+                dist = float(np.linalg.norm(p_profile - p_guide))
+                if dist > self.tol:
+                    raise ConstructionError(
+                        f"Network not compatible at profile {i} / guide {j}: "
+                        f"f_{i}(u_{j}={self.u_nodes[j]:.4f}) and "
+                        f"g_{j}(v_{i}={self.v_nodes[i]:.4f}) differ by {dist:.2e} > tol={self.tol:.2e}."
+                    )
+
+    def _build_grid(self) -> np.ndarray:
+        """Build the (M, N, 3) array of intersection points P_ij = f_i(u_j)."""
+        m, n = len(self.profiles), len(self.guides)
+        grid = np.zeros((m, n, 3), dtype=float)
+        for i, profile in enumerate(self.profiles):
+            for j in range(n):
+                grid[i, j] = profile.point_at_parameter(float(self.u_nodes[j])).as_array()
+        return grid
+
+    @staticmethod
+    def _interp(nodes: np.ndarray, values: np.ndarray, query: float, degree: int) -> np.ndarray:
+        """Interpolate vector-valued ``values`` defined at ``nodes``, evaluated at ``query``.
+
+        Uses a B-spline interpolant of the given degree. The same operator is
+        used for the skinning surfaces and the tensor-product term, which is what
+        makes the Boolean sum reproduce the input curves exactly.
+        """
+        spline = make_interp_spline(nodes, np.asarray(values, dtype=float), k=degree, axis=0)
+        return np.asarray(spline(query), dtype=float)
+
+    def _eval_loft_u(self, u: float, v: float) -> np.ndarray:
+        """S_u: evaluate all profiles at u, then interpolate across v."""
+        pts = np.array([p.point_at_parameter(u).as_array() for p in self.profiles])
+        return self._interp(self.v_nodes, pts, v, self._deg_v)
+
+    def _eval_loft_v(self, u: float, v: float) -> np.ndarray:
+        """S_v: evaluate all guides at v, then interpolate across u."""
+        pts = np.array([g.point_at_parameter(v).as_array() for g in self.guides])
+        return self._interp(self.u_nodes, pts, u, self._deg_u)
+
+    def _eval_tensor(self, u: float, v: float) -> np.ndarray:
+        """T: interpolate the intersection grid in v (per guide), then in u."""
+        # For each guide column j, interpolate the M grid points across v.
+        t_cols = np.array(
+            [self._interp(self.v_nodes, self._grid[:, j, :], v, self._deg_v) for j in range(self.n_guides)]
+        )
+        # Then interpolate those N points across u.
+        return self._interp(self.u_nodes, t_cols, u, self._deg_u)
+
+    def point_at_parameter(self, u: float, v: float) -> Point:
+        """Evaluate the Gordon surface at parameters (u, v), each in [0, 1]."""
+        result = self._eval_loft_u(u, v) + self._eval_loft_v(u, v) - self._eval_tensor(u, v)
+        return Point(float(result[0]), float(result[1]), float(result[2]))
+
+    def sample_grid(self, n_u: int = 20, n_v: int = 20) -> np.ndarray:
+        """Sample the surface on a regular (n_u, n_v, 3) grid."""
+        us = np.linspace(0.0, 1.0, n_u)
+        vs = np.linspace(0.0, 1.0, n_v)
+        grid = np.zeros((n_u, n_v, 3), dtype=float)
+        for a, u in enumerate(us):
+            for b, v in enumerate(vs):
+                pt = self.point_at_parameter(u, v)
+                grid[a, b] = [pt.x, pt.y, pt.z]
         return grid
 
 

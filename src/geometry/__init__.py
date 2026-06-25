@@ -12,7 +12,7 @@ from geometry.errors import (
     ToleranceError,
 )
 from geometry.primitives import Line, Orientation, Plane, Point, Position, Vector
-from geometry.surfaces import GordonPatch
+from geometry.surfaces import GordonPatch, GordonSurface
 
 __all__ = [
     "Point",
@@ -24,6 +24,7 @@ __all__ = [
     "InterpolatedLine",
     "TrimmedCurve",
     "GordonPatch",
+    "GordonSurface",
     "GeometryError",
     "ConstructionError",
     "NotPlanarError",

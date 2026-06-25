@@ -7,6 +7,7 @@ from geometry.aero.utils import (
     tanh_density,
 )
 from geometry.aero.wing_shape import WingShape
+from geometry.aero.wing_surface import WingSurface
 
 __all__ = [
     "CSTPolynomial",
@@ -15,4 +16,5 @@ __all__ = [
     "create_cst_class_function",
     "tanh_density",
     "WingShape",
+    "WingSurface",
 ]
