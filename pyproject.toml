@@ -16,6 +16,11 @@ dependencies = [
     "scipy>=1.13.1",
 ]
 
+[project.optional-dependencies]
+# OpenCASCADE-backed CAD + unstructured meshing (geometry.occ). gmsh embeds
+# the OCCT kernel and is pip-installable on Linux/macOS (incl. Apple Silicon)/Windows.
+occ = ["gmsh>=4.13"]
+
 [tool.setuptools_scm]
 
 [tool.black]
