@@ -16,14 +16,22 @@ Each section is scaled by its chord and placed relative to a straight, unswept
 reference line at x=0, z=0 (the quarter-chord line by default). The section is
 rotated by its twist about that reference point (positive twist = leading edge
 up) and translated to its spanwise station. With the default quarter-chord
-reference, the leading edge therefore sweeps forward as the chord changes while
-the quarter-chord line stays straight.
+reference, the leading edge sweeps forward as the chord changes while the
+quarter-chord line stays straight.
 
 Parameterization (chosen so the strict Gordon network is exactly compatible):
     - profiles run TE(upper) -> LE -> TE(lower) with u=0 at the upper TE,
       u=0.5 pinned at the LE, u=1 at the lower TE.
-    - guides are parameterized by the spanwise fraction eta, so every guide
-      shares the same v at a given station.
+    - the chordwise parameter law is selectable via ``chordwise_spacing``:
+        * "arclength" (default): u tracks cumulative arc length along the
+          section (normalized per half). Uniform u then gives roughly uniform
+          spacing around the section, so the leading edge is well resolved
+          without special clustering.
+        * "chord": u is a linear function of chord fraction x/c, so an iso-u
+          line follows a constant x/c across the span (useful e.g. for placing
+          spanwise features), at the cost of poor leading-edge node density.
+    - guides are parameterized by spanwise fraction eta, so every guide shares
+      the same v at a given station.
 """
 from __future__ import annotations
 
@@ -34,6 +42,7 @@ import numpy as np
 from geometry.aero.cst import AirfoilCST
 from geometry.aero.wing_shape import WingShape
 from geometry.curves import InterpolatedLine
+from geometry.mesh import Mesh, mesh_surface
 from geometry.primitives import Point
 from geometry.surfaces import GordonSurface
 
@@ -45,7 +54,9 @@ class WingSurface:
         wing_shape: The wing parametrisation to build geometry from.
         n_sections: Number of spanwise airfoil stations (profiles), >= 2.
         n_chord: Number of chordwise sample points per airfoil surface.
-        tanh_p: Clustering parameter for the airfoil chordwise sampling.
+        reference_chord_fraction: Chord fraction of the straight, unswept
+            reference line the sections are centred on and twisted about
+            (0.25 = quarter chord).
         tol: Compatibility tolerance passed to the Gordon surface.
     """
 
@@ -54,19 +65,27 @@ class WingSurface:
         wing_shape: WingShape,
         n_sections: int = 8,
         n_chord: int = 60,
-        tanh_p: float = 1.0,
         reference_chord_fraction: float = 0.25,
+        chordwise_spacing: str = "arclength",
         tol: float = 1e-6,
     ):
         if n_sections < 2:  # noqa: PLR2004
             raise ValueError("n_sections must be >= 2.")
+        if n_chord < 2:  # noqa: PLR2004
+            raise ValueError("n_chord must be >= 2.")
+        if chordwise_spacing not in ("arclength", "chord"):
+            raise ValueError("chordwise_spacing must be 'arclength' or 'chord'.")
         self.wing_shape = wing_shape
         self.n_sections = n_sections
         self.n_chord = n_chord
-        self.tanh_p = tanh_p
-        # Fraction of the chord that defines the straight, unswept reference line
-        # the sections are centred on and twisted about (0.25 = quarter chord).
         self.reference_chord_fraction = reference_chord_fraction
+        self.chordwise_spacing = chordwise_spacing
+
+        # Shared chordwise sample stations (cosine: clustered at LE and TE).
+        k = np.arange(n_chord)
+        self._xs = 0.5 * (1.0 - np.cos(np.pi * k / (n_chord - 1)))  # x/c in [0, 1]
+        # Chord-fraction parameter law (used when chordwise_spacing == "chord").
+        self._chord_loop_u = self._chord_fraction_params(self._xs)
 
         self.etas = list(np.linspace(0.0, 1.0, n_sections))
 
@@ -97,6 +116,45 @@ class WingSurface:
             tol=tol,
         )
 
+    @staticmethod
+    def _chord_fraction_params(xs: np.ndarray) -> list[float]:
+        """Chord-fraction parameter for the TE->LE->TE loop.
+
+        Upper surface (TE -> LE): u = 0.5 * (1 - x/c), so u runs 0 -> 0.5.
+        Lower surface (LE -> TE): u = 0.5 + 0.5 * x/c, so u runs 0.5 -> 1.
+        """
+        upper_u = [0.5 * (1.0 - float(xc)) for xc in xs[::-1]]
+        lower_u = [0.5 + 0.5 * float(xc) for xc in xs[1:]]
+        return upper_u + lower_u
+
+    @staticmethod
+    def _arclength_params(pts3d: list[Point], le_idx: int) -> list[float]:
+        """Arc-length parameter for the loop, normalized per half.
+
+        The upper half (indices 0..le_idx) maps to [0, 0.5] and the lower half
+        (le_idx..end) to [0.5, 1] by cumulative 3D arc length, so the leading
+        edge stays pinned at u=0.5 and the trailing edge at u=0 and u=1.
+        """
+        eps = 1e-12
+        coords = np.array([p.as_array() for p in pts3d], dtype=float)
+        seg = np.linalg.norm(np.diff(coords, axis=0), axis=1)
+        cum = np.concatenate([[0.0], np.cumsum(seg)])
+
+        params = np.empty(len(pts3d), dtype=float)
+        upper_len = cum[le_idx]
+        if upper_len > eps:
+            params[: le_idx + 1] = 0.5 * cum[: le_idx + 1] / upper_len
+        else:
+            # Degenerate (e.g. zero-chord) section: fall back to uniform.
+            params[: le_idx + 1] = np.linspace(0.0, 0.5, le_idx + 1)
+        lower_cum = cum[le_idx:] - cum[le_idx]
+        lower_len = lower_cum[-1]
+        if lower_len > eps:
+            params[le_idx:] = 0.5 + 0.5 * lower_cum / lower_len
+        else:
+            params[le_idx:] = np.linspace(0.5, 1.0, len(pts3d) - le_idx)
+        return params.tolist()
+
     def _section_point(
         self, x_c: float, y_c: float, chord: float, twist_rad: float, span_y: float
     ) -> Point:
@@ -120,20 +178,19 @@ class WingSurface:
         twist_rad = math.radians(float(self.wing_shape.twist_distribution(eta)))
         span_y = eta * self.wing_shape.semispan
 
-        upper_pts, lower_pts = airfoil.coordinates(self.n_chord, tanh_p_sampling=self.tanh_p)
+        # Sample upper/lower at the shared x/c stations.
+        upper = [(float(xc), airfoil.upper.sample(float(xc))) for xc in self._xs]
+        lower = [(float(xc), airfoil.lower.sample(float(xc))) for xc in self._xs]
 
         # Loop order: upper TE -> LE (reverse upper), then LE -> lower TE.
-        upper_rev = list(reversed(upper_pts))  # x: 1 -> 0
-        lower = lower_pts  # x: 0 -> 1
-        le_idx = len(upper_rev) - 1  # LE sits at the junction
+        loop = upper[::-1] + lower[1:]  # drop the duplicated LE point
+        pts3d = [self._section_point(x_c, y_c, chord, twist_rad, span_y) for (x_c, y_c) in loop]
 
-        loop = upper_rev + lower[1:]  # drop duplicated LE
-        pts3d = [
-            self._section_point(x_c, y_c, chord, twist_rad, span_y) for (x_c, y_c) in loop
-        ]
-
-        params = self._loop_params(loop, le_idx)
-
+        le_idx = self.n_chord - 1
+        if self.chordwise_spacing == "chord":
+            params = self._chord_loop_u
+        else:  # "arclength"
+            params = self._arclength_params(pts3d, le_idx)
         profile = InterpolatedLine(pts3d, params=params)
         le_point = pts3d[le_idx]
         te_point = pts3d[0]  # upper TE (== lower TE for a sharp trailing edge)
@@ -142,27 +199,6 @@ class WingSurface:
         )
         return profile, le_point, te_point, ref_point
 
-    @staticmethod
-    def _loop_params(loop: list[tuple[float, float]], le_idx: int) -> list[float]:
-        """Parameter values for the section loop: upper -> [0, 0.5], lower -> [0.5, 1].
-
-        Within each half the spacing follows chord-length, but the leading edge
-        is pinned to exactly 0.5 so it is shared across all sections.
-        """
-        coords = np.array(loop, dtype=float)
-        seg = np.linalg.norm(np.diff(coords, axis=0), axis=1)
-        cum = np.concatenate([[0.0], np.cumsum(seg)])
-
-        params = np.empty(len(loop), dtype=float)
-        # Upper half: indices 0..le_idx -> [0, 0.5]
-        upper_len = cum[le_idx] if cum[le_idx] > 0 else 1.0
-        params[: le_idx + 1] = 0.5 * cum[: le_idx + 1] / upper_len
-        # Lower half: indices le_idx..end -> [0.5, 1]
-        lower_cum = cum[le_idx:] - cum[le_idx]
-        lower_len = lower_cum[-1] if lower_cum[-1] > 0 else 1.0
-        params[le_idx:] = 0.5 + 0.5 * lower_cum / lower_len
-        return params.tolist()
-
     def point_at_parameter(self, u: float, v: float) -> Point:
         """Evaluate the wing surface at chordwise u and spanwise v, each in [0, 1]."""
         return self.surface.point_at_parameter(u, v)
@@ -170,3 +206,30 @@ class WingSurface:
     def sample_grid(self, n_u: int = 60, n_v: int = 30) -> np.ndarray:
         """Sample the wing surface on a regular (n_u, n_v, 3) grid."""
         return self.surface.sample_grid(n_u, n_v)
+
+    def mesh(
+        self,
+        u_params: list[float] | None = None,
+        v_params: list[float] | None = None,
+        n_u: int = 80,
+        n_v: int = 20,
+        wrap_u: bool = True,
+    ) -> Mesh:
+        """Build a quad :class:`~geometry.mesh.Mesh` over the wing surface.
+
+        Args:
+            u_params: Explicit chordwise parameter stations in [0, 1]. When given,
+                ``n_u``/``wrap_u`` endpoint handling is up to the caller.
+            v_params: Explicit spanwise parameter stations in [0, 1].
+            n_u: Number of chordwise stations if ``u_params`` is not given.
+            n_v: Number of spanwise stations if ``v_params`` is not given.
+            wrap_u: Close the mesh in the chordwise direction (the section loop
+                wraps around the trailing edge). When generating default
+                ``u_params`` the trailing-edge endpoint is dropped to avoid
+                duplicate nodes at the seam.
+        """
+        if u_params is None:
+            u_params = list(np.linspace(0.0, 1.0, n_u, endpoint=not wrap_u))
+        if v_params is None:
+            v_params = list(np.linspace(0.0, 1.0, n_v))
+        return mesh_surface(self, u_params, v_params, wrap_u=wrap_u)
