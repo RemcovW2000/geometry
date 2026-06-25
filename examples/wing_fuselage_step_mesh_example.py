@@ -26,7 +26,13 @@ from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
 from geometry.occ import GmshSession
 from geometry.occ.meshing import generate_surface_mesh, make_structured_quads_uv, set_curvature_sizing
-from geometry.occ.ops import face_centroid, face_tags, import_step, n_boundary_curves
+from geometry.occ.ops import (
+    describe_faces,
+    face_centroid,
+    face_tags,
+    import_step,
+    n_boundary_curves,
+)
 from geometry.occ.solids import loft_split_solid, solid_from_section_loops
 
 STEP_PATH = "/Users/remcovanwoerkom/PycharmProjects/geometry/data/simplified_fuselage_solid.step"
@@ -47,8 +53,8 @@ OUTBOARD_X_MIN = 200.0
 # Mesh controls.
 N_CHORD = 41             # structured nodes around the chord (per side)
 N_SPAN = 25              # structured nodes along the outboard span
-CURVATURE_N = 24.0       # unstructured: elements per 2*pi of curvature
-SIZE_MIN, SIZE_MAX = 10, 60.0
+CURVATURE_N = 96.0       # unstructured: elements per 2*pi of curvature
+SIZE_MIN, SIZE_MAX = 5, 30
 
 
 def build_wing() -> WingSurface:
@@ -93,9 +99,20 @@ def main() -> None:
         occ.translate(wing_dimtags, *WING_TRANSLATION)
         occ.synchronize()
 
+        # DIAGNOSTIC: outboard solid faces BEFORE fuse — are they 4-sided, and
+        # did the rotation put them at large X (the span direction)?
+        ob_faces = [t for (d, t) in s.model.getBoundary([(3, outboard)], oriented=False)]
+        print("--- outboard faces before fuse ---")
+        for t in ob_faces:
+            print(f"    face {t}: n_curves={n_boundary_curves(s.gmsh, t)} "
+                  f"centroid={np.round(face_centroid(s.gmsh, t), 1)}")
+
         out, _ = occ.fuse([(3, fus[0])], [(3, inboard), (3, outboard)])
         occ.synchronize()
         print("fused volumes:", out)
+
+        # DIAGNOSTIC: all faces after fuse.
+        describe_faces(s.gmsh, span_axis=0, outboard_min=OUTBOARD_X_MIN)
 
         # 4. structured quads on outboard wing faces (4-sided, centroid beyond fuselage)
         n_struct = 0

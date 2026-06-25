@@ -72,14 +72,24 @@ def set_transfinite_curve(gmsh, curve_tag: int, n_nodes: int,
 
 
 def set_curvature_sizing(gmsh, n_per_2pi: float = 20.0,
-                         size_min: float | None = None, size_max: float | None = None) -> None:
+                         size_min: float | None = None, size_max: float | None = None,
+                         curvature_only: bool = True) -> None:
     """Enable curvature-adaptive element sizing for unstructured faces.
 
     ``n_per_2pi`` is roughly the number of elements per full turn of curvature,
     so high-curvature regions (leading edges, nose) get finer elements. Has no
     effect on transfinite (structured) faces.
+
+    With ``curvature_only=True`` (recommended for imported STEP), the competing
+    size sources are disabled so curvature alone drives the size: STEP files
+    carry per-vertex characteristic lengths (``MeshSizeFromPoints``) and gmsh
+    also extends sizes inward from boundaries (``MeshSizeExtendFromBoundary``);
+    both fight the curvature field and cause patchy refinement.
     """
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(n_per_2pi))
+    if curvature_only:
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
     if size_min is not None:
         gmsh.option.setNumber("Mesh.MeshSizeMin", float(size_min))
     if size_max is not None:

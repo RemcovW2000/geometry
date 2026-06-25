@@ -63,6 +63,41 @@ def n_boundary_curves(gmsh, face_tag: int) -> int:
     return sum(1 for (d, t) in b if d == 1)
 
 
+def describe_faces(gmsh, span_axis: int = 0, outboard_min: float | None = None) -> list[dict]:
+    """Print a summary of all faces (centroid, #curves, bbox) for debugging.
+
+    Returns a list of per-face dicts. ``outboard_min`` (if given) reports how
+    many faces lie beyond it along ``span_axis`` and how many of those are
+    4-sided (i.e. eligible for structured meshing).
+    """
+    import numpy as np
+
+    info = []
+    for tag in face_tags(gmsh):
+        cen = face_centroid(gmsh, tag)
+        nbc = n_boundary_curves(gmsh, tag)
+        bb = gmsh.model.getBoundingBox(2, tag)
+        info.append({"tag": tag, "centroid": cen, "n_curves": nbc, "bbox": bb})
+
+    hist: dict[int, int] = {}
+    for f in info:
+        hist[f["n_curves"]] = hist.get(f["n_curves"], 0) + 1
+    cen_axis = np.array([f["centroid"][span_axis] for f in info])
+    print(f"[describe_faces] {len(info)} faces; #curves histogram: "
+          f"{dict(sorted(hist.items()))}")
+    print(f"[describe_faces] centroid[axis {span_axis}] range: "
+          f"{cen_axis.min():.1f} .. {cen_axis.max():.1f}")
+    if outboard_min is not None:
+        beyond = [f for f in info if f["centroid"][span_axis] > outboard_min]
+        quad = [f for f in beyond if f["n_curves"] == 4]  # noqa: PLR2004
+        print(f"[describe_faces] beyond {outboard_min} on axis {span_axis}: "
+              f"{len(beyond)} faces, of which 4-sided: {len(quad)}")
+        for f in beyond[:12]:
+            print(f"    tag={f['tag']} n_curves={f['n_curves']} "
+                  f"centroid={np.round(f['centroid'], 1)}")
+    return info
+
+
 def sample_curve(gmsh, tag: int, n: int = 60) -> InterpolatedLine:
     """Sample a model curve into an :class:`InterpolatedLine`."""
     lo, hi = gmsh.model.getParametrizationBounds(1, tag)
