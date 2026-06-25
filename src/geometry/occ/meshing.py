@@ -73,23 +73,26 @@ def set_transfinite_curve(gmsh, curve_tag: int, n_nodes: int,
 
 def set_curvature_sizing(gmsh, n_per_2pi: float = 20.0,
                          size_min: float | None = None, size_max: float | None = None,
-                         curvature_only: bool = True) -> None:
+                         from_points: bool = False, extend_from_boundary: bool = False) -> None:
     """Enable curvature-adaptive element sizing for unstructured faces.
 
     ``n_per_2pi`` is roughly the number of elements per full turn of curvature,
     so high-curvature regions (leading edges, nose) get finer elements. Has no
     effect on transfinite (structured) faces.
 
-    With ``curvature_only=True`` (recommended for imported STEP), the competing
-    size sources are disabled so curvature alone drives the size: STEP files
-    carry per-vertex characteristic lengths (``MeshSizeFromPoints``) and gmsh
-    also extends sizes inward from boundaries (``MeshSizeExtendFromBoundary``);
-    both fight the curvature field and cause patchy refinement.
+    Notes on the competing size sources:
+        - ``from_points`` (``Mesh.MeshSizeFromPoints``): STEP files carry
+          per-vertex characteristic lengths that fight the curvature field and
+          cause patchy refinement. Keep this **off** for imported geometry.
+        - ``extend_from_boundary`` (``Mesh.MeshSizeExtendFromBoundary``):
+          interpolates sizes across each face, which *smooths* size transitions.
+          This is gmsh's de-facto gradation control (it has no scalar
+          "growth rate"); keep it **on** for smooth growth. If you still see
+          patchiness, turn it off.
     """
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(n_per_2pi))
-    if curvature_only:
-        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
-        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1 if from_points else 0)
+    gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1 if extend_from_boundary else 0)
     if size_min is not None:
         gmsh.option.setNumber("Mesh.MeshSizeMin", float(size_min))
     if size_max is not None:

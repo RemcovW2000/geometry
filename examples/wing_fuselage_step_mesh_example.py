@@ -28,12 +28,13 @@ from geometry.occ import GmshSession
 from geometry.occ.meshing import generate_surface_mesh, make_structured_quads_uv, set_curvature_sizing
 from geometry.occ.ops import (
     describe_faces,
+    export_step,
     face_centroid,
     face_tags,
     import_step,
     n_boundary_curves,
 )
-from geometry.occ.solids import loft_split_solid, solid_from_section_loops
+from geometry.occ.solids import loft_split_solid
 
 STEP_PATH = "/Users/remcovanwoerkom/PycharmProjects/geometry/data/simplified_fuselage_solid.step"
 
@@ -86,8 +87,10 @@ def main() -> None:
         fus = [tag for (dim, tag) in imported if dim == 3]
         print("imported fuselage solids:", fus)
 
-        # 2. wing solids: inboard (closed skin), outboard (split faces -> structured)
-        inboard = solid_from_section_loops(s.gmsh, [wing.section_loop(e, 80) for e in etas_in])
+        # 2. wing solids: BOTH inboard and outboard use the split-face loft so
+        # their sections match at the split (otherwise the mismatch shreds the
+        # outboard root edge and the faces stop being 4-sided).
+        inboard = loft_split_solid(s.gmsh, [wing.section_edges(e, 45) for e in etas_in])
         outboard = loft_split_solid(s.gmsh, [wing.section_edges(e, 45) for e in etas_out])
         occ.synchronize()
 
@@ -110,6 +113,10 @@ def main() -> None:
         out, _ = occ.fuse([(3, fus[0])], [(3, inboard), (3, outboard)])
         occ.synchronize()
         print("fused volumes:", out)
+
+        # Export the fused geometry to STEP for inspection in a CAD viewer.
+        export_step(s.gmsh, "wing_fuselage_fused.step")
+        print("wrote wing_fuselage_fused.step")
 
         # DIAGNOSTIC: all faces after fuse.
         describe_faces(s.gmsh, span_axis=0, outboard_min=OUTBOARD_X_MIN)
