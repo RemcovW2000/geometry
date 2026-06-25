@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geometry"
+dynamic = ["version"]
+description = "Standalone geometry primitives, curves, surfaces and pure-geometry meshing (no FEM/structures dependency)."
+authors = [
+    {name = "Remco van Woerkom", email = "RemcovW2000@gmail.com"}]
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib>=3.9.4",
+    "numpy",
+    "pytest>=8.4.2",
+    "scipy>=1.13.1",
+]
+
+[tool.setuptools_scm]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["geometry"]
+
+[project.urls]
+Repository = "https://github.com/RemcovW2000/geometry"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+geometry = ["py.typed", "aero/airfoils/*.txt"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "PL", "D"]
+ignore = [
+    "E501", "PLR0913", "PLR0915", "UP007", "E731",
+    "D203", "D213",
+    "D107", "D105", "D104",
+    "D405", "D406", "D407", "D411", "D414", "D416", "D417",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.isort]
+known-first-party = ["geometry"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "D"]
+"**/__init__.py" = ["F401", "D104"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
