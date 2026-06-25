@@ -20,14 +20,24 @@ import math
 
 import numpy as np
 
+from geometry import Orientation, Point, Position, Vector
 from geometry.aero.cst import AirfoilCST, CSTPolynomial
 from geometry.aero.utils import linear_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
 from geometry.occ import GmshSession
-from geometry.occ.meshing import generate_surface_mesh, make_structured_quads_uv, set_curvature_sizing
+from geometry.occ.meshing import (
+    field_distance,
+    field_threshold,
+    generate_surface_mesh,
+    make_structured_quads_uv,
+    set_background_field,
+    set_curvature_sizing,
+)
 from geometry.occ.ops import (
+    apply_position,
     describe_faces,
+    export_mesh,
     export_step,
     face_centroid,
     face_tags,
@@ -36,26 +46,37 @@ from geometry.occ.ops import (
 )
 from geometry.occ.solids import loft_split_solid
 
+IDENTITY = Orientation(Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1))
+
 STEP_PATH = "/Users/remcovanwoerkom/PycharmProjects/geometry/data/simplified_fuselage_solid.step"
 
 ROOT_CHORD = 300.0       # mm
 TIP_CHORD = 150.0        # mm
 SEMISPAN = 900.0         # mm  (> fuselage half-width so the wing protrudes)
-SPLIT_ETA = 0.4          # spanwise split between inboard and outboard
+SPLIT_ETA = 0.2          # spanwise split between inboard and outboard
 
-# Wing placement: rotate span Y->+X so the wing sticks out the fuselage side,
-# then translate. Edit these to reposition the wing on the fuselage.
-WING_ROTATION = dict(x=0.0, y=0.0, z=0.0, ax=0.0, ay=0.0, az=1.0, angle=-math.pi / 2)
-WING_TRANSLATION = (0.0, 0.0, 0.0)
+# Wing placement, expressed with the geometry Position/Orientation API.
+# Here: rotate span Y->+X (so the wing sticks out the fuselage side), root at
+# the origin. Edit the origin/orientation to reposition on the fuselage.
+WING_POSITION = Position(
+    origin=Point(0.0, 0.0, 0.0),
+    orientation=IDENTITY.rotate(-math.pi / 2, Vector(0.0, 0.0, 1.0)),
+)
 
 # Faces with centroid X beyond this are "outboard" (clear of the fuselage).
 OUTBOARD_X_MIN = 200.0
 
-# Mesh controls.
-N_CHORD = 41             # structured nodes around the chord (per side)
-N_SPAN = 25              # structured nodes along the outboard span
-CURVATURE_N = 96.0       # unstructured: elements per 2*pi of curvature
-SIZE_MIN, SIZE_MAX = 5, 30
+# Structured (outboard wing) mesh distribution.
+N_CHORD = 41                    # nodes around the chord (per side)
+N_SPAN = 25                     # nodes along the outboard span
+CHORD_LAW, CHORD_COEF = "Bump", 0.25         # cluster LE & TE (dual-sided)
+SPAN_LAW, SPAN_COEF = "Progression", 0.85    # cluster toward the root
+
+# Unstructured sizing: curvature + a size field that grows away from the wing.
+CURVATURE_N = 96.0             # elements per 2*pi of curvature
+SIZE_MIN, SIZE_MAX = 5.0, 40.0
+WING_REFINE_SIZE = 6.0         # target size on the fuselage near the wing
+GROWTH_DISTANCE = 500.0        # mm over which size ramps SIZE near -> SIZE_MAX far
 
 
 def build_wing() -> WingSurface:
@@ -94,12 +115,9 @@ def main() -> None:
         outboard = loft_split_solid(s.gmsh, [wing.section_edges(e, 45) for e in etas_out])
         occ.synchronize()
 
-        # 3. place the wing, then fuse everything
+        # 3. place the wing using the geometry Position API, then fuse everything
         wing_dimtags = [(3, inboard), (3, outboard)]
-        occ.rotate(wing_dimtags, WING_ROTATION["x"], WING_ROTATION["y"], WING_ROTATION["z"],
-                   WING_ROTATION["ax"], WING_ROTATION["ay"], WING_ROTATION["az"],
-                   WING_ROTATION["angle"])
-        occ.translate(wing_dimtags, *WING_TRANSLATION)
+        apply_position(s.gmsh, wing_dimtags, WING_POSITION)
         occ.synchronize()
 
         # DIAGNOSTIC: outboard solid faces BEFORE fuse — are they 4-sided, and
@@ -121,23 +139,39 @@ def main() -> None:
         # DIAGNOSTIC: all faces after fuse.
         describe_faces(s.gmsh, span_axis=0, outboard_min=OUTBOARD_X_MIN)
 
-        # 4. structured quads on outboard wing faces (4-sided, centroid beyond fuselage)
-        n_struct = 0
+        # 4. structured quads on outboard wing faces, with chord/span distributions
+        structured_faces: list[int] = []
         for tag in face_tags(s.gmsh):
             cx = face_centroid(s.gmsh, tag)[0]
             if cx > OUTBOARD_X_MIN and n_boundary_curves(s.gmsh, tag) == 4:  # noqa: PLR2004
                 try:
-                    if make_structured_quads_uv(s.gmsh, tag, N_CHORD, N_SPAN, span_axis=0):
-                        n_struct += 1
+                    ok = make_structured_quads_uv(
+                        s.gmsh, tag, N_CHORD, N_SPAN, span_axis=0,
+                        chord_law=CHORD_LAW, chord_coef=CHORD_COEF,
+                        span_law=SPAN_LAW, span_coef=SPAN_COEF,
+                    )
+                    if ok:
+                        structured_faces.append(tag)
                 except Exception as exc:  # noqa: BLE001
                     print(f"  face {tag}: structured failed ({exc}); leaving unstructured")
-        print(f"structured faces: {n_struct}")
+        print(f"structured faces: {len(structured_faces)}")
 
-        # 5. curvature-adaptive sizing for the unstructured remainder
+        # 5. unstructured sizing: curvature + a size field that grows away from the
+        #    wing (fine near the wing junction, smoothly coarsening over GROWTH_DISTANCE).
         set_curvature_sizing(s.gmsh, n_per_2pi=CURVATURE_N, size_min=SIZE_MIN, size_max=SIZE_MAX)
+        if structured_faces:
+            dist = field_distance(s.gmsh, surfaces=structured_faces)
+            thr = field_threshold(s.gmsh, dist, size_min=WING_REFINE_SIZE, size_max=SIZE_MAX,
+                                  dist_min=0.0, dist_max=GROWTH_DISTANCE)
+            set_background_field(s.gmsh, thr)  # combined with curvature by min
 
         mesh = generate_surface_mesh(s.gmsh)
         print(f"surface mesh: {len(mesh.nodes)} nodes, {len(mesh.elements)} elements")
+
+        # Export for downstream solvers.
+        export_mesh(s.gmsh, "wing_fuselage_mesh.stl", binary=False)  # FlightStream / OpenVSP (ASCII)
+        export_mesh(s.gmsh, "wing_fuselage_mesh.vtk")                # ParaView / quad-preserving
+        print("wrote wing_fuselage_mesh.stl and .vtk")
 
         polygons = [np.array([n.as_array() for n in e.nodes]) for e in mesh.elements]
 

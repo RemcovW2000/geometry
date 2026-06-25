@@ -11,6 +11,31 @@ from geometry.curves import InterpolatedLine
 from geometry.primitives import Point
 
 
+def apply_position(gmsh, dimtags: list[tuple[int, int]], position) -> None:
+    """Rigidly place entities using a geometry :class:`~geometry.primitives.Position`.
+
+    The Position's orientation (rotation, local->global) and origin (translation)
+    are converted to an OCC affine transform, so you can place a wing on a
+    fuselage with the same Position/Orientation API you use everywhere else::
+
+        from geometry import Orientation, Point, Position, Vector
+        ident = Orientation(Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1))
+        # span Y -> +X, root at the origin:
+        pos = Position(Point(0, 0, 0), ident.rotate(-math.pi / 2, Vector(0, 0, 1)))
+        apply_position(gmsh, [(3, wing_solid)], pos)
+
+    Applies ``global = R @ local + origin`` (matching ``Position.point_in_global``).
+    """
+    r = position.orientation.as_matrix()
+    o = position.origin.as_array()
+    affine = [
+        r[0, 0], r[0, 1], r[0, 2], o[0],
+        r[1, 0], r[1, 1], r[1, 2], o[1],
+        r[2, 0], r[2, 1], r[2, 2], o[2],
+    ]
+    gmsh.model.occ.affineTransform(list(dimtags), [float(v) for v in affine])
+
+
 def fragment(gmsh, dimtags_a: list[tuple[int, int]], dimtags_b: list[tuple[int, int]]):
     """Boolean-fragment two sets of entities (e.g. ``[(2, wing)]``, ``[(2, fuse)]``).
 
@@ -27,6 +52,25 @@ def fragment(gmsh, dimtags_a: list[tuple[int, int]], dimtags_b: list[tuple[int, 
 
 def export_step(gmsh, path: str) -> None:
     """Write the current model to STEP (use a .step/.stp extension)."""
+    gmsh.write(str(path))
+
+
+def export_mesh(gmsh, path: str, binary: bool = False) -> None:
+    """Write the current mesh to ``path``; the format is chosen by extension.
+
+    gmsh writes many mesh formats by extension, e.g.:
+        .stl   triangulated surface  -> FlightStream / OpenVSP import
+               (quads are split to triangles; use ASCII for OpenVSP)
+        .tri   Cart3D triangulation  -> OpenVSP
+        .vtk   ParaView / FlightStream results viewing (preserves quads)
+        .bdf   Nastran (preserves quads), .msh native gmsh, .su2, .unv, ...
+
+    Args:
+        path: output filename (extension selects the format).
+        binary: write binary where supported. Keep ``False`` (ASCII) for STL
+            going into OpenVSP, which is more reliable per its docs.
+    """
+    gmsh.option.setNumber("Mesh.Binary", 1 if binary else 0)
     gmsh.write(str(path))
 
 

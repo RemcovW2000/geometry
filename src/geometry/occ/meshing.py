@@ -85,10 +85,12 @@ def set_curvature_sizing(gmsh, n_per_2pi: float = 20.0,
           per-vertex characteristic lengths that fight the curvature field and
           cause patchy refinement. Keep this **off** for imported geometry.
         - ``extend_from_boundary`` (``Mesh.MeshSizeExtendFromBoundary``):
-          interpolates sizes across each face, which *smooths* size transitions.
-          This is gmsh's de-facto gradation control (it has no scalar
-          "growth rate"); keep it **on** for smooth growth. If you still see
-          patchiness, turn it off.
+          interpolates sizes inward from each face's boundary edges. It can
+          smooth transitions, but because it pulls the *finest* boundary size
+          across the whole face it tends to over-refine flat faces (they never
+          reach ``size_max``). Keep it **off** so curvature drives size per face
+          (flat -> coarse, curved -> fine). For true bounded gradation, use a
+          size field instead.
     """
     gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", float(n_per_2pi))
     gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1 if from_points else 0)
@@ -100,13 +102,26 @@ def set_curvature_sizing(gmsh, n_per_2pi: float = 20.0,
 
 
 def make_structured_quads_uv(gmsh, face_tag: int, n_chord: int, n_span: int,
-                             span_axis: int = 0, recombine: bool = True) -> bool:
-    """Structured quad mesh on a 4-sided face, with separate chord/span counts.
+                             span_axis: int = 0, recombine: bool = True,
+                             chord_law: str = "Progression", chord_coef: float = 1.0,
+                             span_law: str = "Progression", span_coef: float = 1.0) -> bool:
+    """Structured quad mesh on a 4-sided face, with per-direction node counts and laws.
 
-    The face's four curves are paired into opposite sides; the pair extending
-    most along ``span_axis`` (0=x, 1=y, 2=z) gets ``n_span`` nodes, the other
-    gets ``n_chord``. Returns True on success, False if the face isn't 4-sided
-    (so the caller can leave it unstructured).
+    The four curves are paired into opposite sides; the pair extending most along
+    ``span_axis`` (0=x, 1=y, 2=z) is the span direction (gets ``n_span`` nodes and
+    ``span_law``/``span_coef``), the other is the chord direction.
+
+    Distribution laws (gmsh transfinite ``meshType``):
+        - "Progression": geometric; ``coef`` is the ratio between successive
+          elements. coef>1 clusters toward one end, coef<1 toward the other
+          (≈ one-sided exponential). coef=1 is uniform.
+        - "Bump": clusters toward BOTH ends when ``coef`` < 1 (≈ dual-sided
+          exponential / cosine); the smaller the coef the stronger the clustering.
+        - "Beta": smooth two-sided clustering controlled by ``coef``.
+
+    For an airfoil chord you typically want "Bump" with coef<1 (refine LE & TE);
+    for the span, "Progression" with coef<1 to refine toward the root, or "Bump"
+    to refine root and tip. Returns False if the face isn't a clean 4-sided patch.
     """
     boundary = gmsh.model.getBoundary([(2, face_tag)], oriented=False, recursive=False)
     curves = [abs(t) for (d, t) in boundary if d == 1]
@@ -133,13 +148,81 @@ def make_structured_quads_uv(gmsh, face_tag: int, n_chord: int, n_span: int,
     span_pair, chord_pair = (pair_a, pair_b) if ext_a >= ext_b else (pair_b, pair_a)
 
     for c in span_pair:
-        gmsh.model.mesh.setTransfiniteCurve(c, n_span)
+        gmsh.model.mesh.setTransfiniteCurve(c, n_span, meshType=span_law, coef=span_coef)
     for c in chord_pair:
-        gmsh.model.mesh.setTransfiniteCurve(c, n_chord)
+        gmsh.model.mesh.setTransfiniteCurve(c, n_chord, meshType=chord_law, coef=chord_coef)
     gmsh.model.mesh.setTransfiniteSurface(face_tag)
     if recombine:
         gmsh.model.mesh.setRecombine(2, face_tag)
     return True
+
+
+def transfinite_positions(n: int, law: str = "Progression", coef: float = 1.0):
+    """Return the [0,1] node positions a gmsh transfinite curve would produce.
+
+    Implemented exactly for "Progression" (geometric) and uniform; provided so
+    you can plot and tune a distribution before meshing. For "Bump"/"Beta",
+    compare against your own ``geometry.mesh.spacing`` functions (e.g.
+    ``nodes_exponential_dual``) which give the dual-sided clustering Bump mimics.
+    """
+    import numpy as np
+
+    if law == "Progression" and abs(coef - 1.0) > 1e-12:  # noqa: PLR2004
+        i = np.arange(n)
+        return (coef**i - 1.0) / (coef ** (n - 1) - 1.0)
+    return np.linspace(0.0, 1.0, n)
+
+
+# ---------------------------------------------------------------------------
+# Size fields (gmsh's mechanism for controlled, smooth size gradation)
+# ---------------------------------------------------------------------------
+
+def field_distance(gmsh, curves: list[int] | None = None,
+                   surfaces: list[int] | None = None, sampling: int = 200) -> int:
+    """A Distance field measuring distance to the given curves/surfaces."""
+    f = gmsh.model.mesh.field.add("Distance")
+    if curves:
+        gmsh.model.mesh.field.setNumbers(f, "CurvesList", list(curves))
+    if surfaces:
+        gmsh.model.mesh.field.setNumbers(f, "SurfacesList", list(surfaces))
+    gmsh.model.mesh.field.setNumber(f, "Sampling", sampling)
+    return f
+
+
+def field_threshold(gmsh, in_field: int, size_min: float, size_max: float,
+                    dist_min: float, dist_max: float) -> int:
+    """A Threshold field: size_min within dist_min, ramping to size_max by dist_max.
+
+    The ramp slope (size_max - size_min)/(dist_max - dist_min) is the effective
+    growth rate, so widening dist_max gives smoother, slower growth.
+    """
+    f = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(f, "InField", in_field)
+    gmsh.model.mesh.field.setNumber(f, "SizeMin", size_min)
+    gmsh.model.mesh.field.setNumber(f, "SizeMax", size_max)
+    gmsh.model.mesh.field.setNumber(f, "DistMin", dist_min)
+    gmsh.model.mesh.field.setNumber(f, "DistMax", dist_max)
+    return f
+
+
+def field_min(gmsh, fields: list[int]) -> int:
+    """A Min field combining several fields (the finest size wins)."""
+    f = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(f, "FieldsList", list(fields))
+    return f
+
+
+def set_background_field(gmsh, field_id: int, disable_other_sources: bool = True) -> None:
+    """Use ``field_id`` as the background mesh size field.
+
+    With ``disable_other_sources`` the point sizes and boundary extension are
+    turned off so the field is authoritative (curvature sizing, if enabled, is
+    still combined by taking the minimum).
+    """
+    gmsh.model.mesh.field.setAsBackgroundMesh(field_id)
+    if disable_other_sources:
+        gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
 
 
 def generate_surface_mesh(
