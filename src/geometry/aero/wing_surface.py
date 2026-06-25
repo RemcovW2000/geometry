@@ -199,6 +199,31 @@ class WingSurface:
         )
         return profile, le_point, te_point, ref_point
 
+    def section_loop(self, eta: float, n_loop: int = 80) -> list[Point]:
+        """Closed airfoil loop (TE->LE->TE) at an arbitrary span fraction eta.
+
+        Returns ``n_loop`` points around the loop with the trailing-edge endpoint
+        dropped, so the loop does not repeat a point (ready to close into a wire).
+        """
+        profile, *_ = self._build_section(eta)
+        us = np.linspace(0.0, 1.0, n_loop, endpoint=False)
+        return [profile.point_at_parameter(float(u)) for u in us]
+
+    def section_edges(self, eta: float, n_half: int = 40) -> tuple[list[Point], list[Point]]:
+        """Upper and lower airfoil curves at span fraction eta.
+
+        Returns ``(upper, lower)`` where ``upper`` runs TE->LE and ``lower`` runs
+        LE->TE; they share the LE point (upper[-1] == lower[0]) and the TE point
+        (lower[-1] == upper[0]). Useful for building a 2-edge section wire so a
+        loft produces separate (4-sided) upper/lower faces.
+        """
+        profile, *_ = self._build_section(eta)
+        u_upper = np.linspace(0.0, 0.5, n_half)   # TE -> LE
+        u_lower = np.linspace(0.5, 1.0, n_half)   # LE -> TE
+        upper = [profile.point_at_parameter(float(u)) for u in u_upper]
+        lower = [profile.point_at_parameter(float(u)) for u in u_lower]
+        return upper, lower
+
     def point_at_parameter(self, u: float, v: float) -> Point:
         """Evaluate the wing surface at chordwise u and spanwise v, each in [0, 1]."""
         return self.surface.point_at_parameter(u, v)

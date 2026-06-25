@@ -42,6 +42,27 @@ def curve_tags(gmsh) -> list[int]:
     return [tag for (dim, tag) in gmsh.model.getEntities(1)]
 
 
+def solid_tags(gmsh) -> list[int]:
+    """Tags of all volume (dim-3) entities."""
+    return [tag for (dim, tag) in gmsh.model.getEntities(3)]
+
+
+def face_tags(gmsh) -> list[int]:
+    """Tags of all surface (dim-2) entities."""
+    return [tag for (dim, tag) in gmsh.model.getEntities(2)]
+
+
+def face_centroid(gmsh, tag: int) -> np.ndarray:
+    """Center of mass of a face (after synchronize)."""
+    return np.array(gmsh.model.occ.getCenterOfMass(2, tag), dtype=float)
+
+
+def n_boundary_curves(gmsh, face_tag: int) -> int:
+    """Number of curves bounding a face (4 for a clean quad patch)."""
+    b = gmsh.model.getBoundary([(2, face_tag)], oriented=False, recursive=False)
+    return sum(1 for (d, t) in b if d == 1)
+
+
 def sample_curve(gmsh, tag: int, n: int = 60) -> InterpolatedLine:
     """Sample a model curve into an :class:`InterpolatedLine`."""
     lo, hi = gmsh.model.getParametrizationBounds(1, tag)
