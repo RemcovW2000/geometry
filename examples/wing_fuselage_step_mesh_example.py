@@ -42,6 +42,7 @@ from geometry.occ.ops import (
     face_centroid,
     face_tags,
     import_step,
+    mirror_copy,
     n_boundary_curves,
 )
 from geometry.occ.solids import loft_split_solid
@@ -122,20 +123,23 @@ def main() -> None:
         outboard = loft_split_solid(s.gmsh, [wing.section_edges(e, 45) for e in etas_out])
         occ.synchronize()
 
-        # 3. place the wing using the geometry Position API, then fuse everything
+        # 3. place the wing, mirror it across the XZ plane (y=0) for the other
+        #    side, then fuse fuselage + both wings.
         wing_dimtags = [(3, inboard), (3, outboard)]
         apply_position(s.gmsh, wing_dimtags, WING_POSITION)
         occ.synchronize()
+        mirror_dimtags = mirror_copy(s.gmsh, wing_dimtags, 0.0, 1.0, 0.0, 0.0)
+        occ.synchronize()
 
         # DIAGNOSTIC: outboard solid faces BEFORE fuse — are they 4-sided, and
-        # did the rotation put them at large X (the span direction)?
+        # did placement put them at large |Y| (the span direction)?
         ob_faces = [t for (d, t) in s.model.getBoundary([(3, outboard)], oriented=False)]
         print("--- outboard faces before fuse ---")
         for t in ob_faces:
             print(f"    face {t}: n_curves={n_boundary_curves(s.gmsh, t)} "
                   f"centroid={np.round(face_centroid(s.gmsh, t), 1)}")
 
-        out, _ = occ.fuse([(3, fus[0])], [(3, inboard), (3, outboard)])
+        out, _ = occ.fuse([(3, fus[0])], wing_dimtags + mirror_dimtags)
         occ.synchronize()
         print("fused volumes:", out)
 
@@ -150,7 +154,7 @@ def main() -> None:
         structured_faces: list[int] = []
         for tag in face_tags(s.gmsh):
             cy = face_centroid(s.gmsh, tag)[1]
-            if cy > OUTBOARD_Y_MIN and n_boundary_curves(s.gmsh, tag) == 4:  # noqa: PLR2004
+            if abs(cy) > OUTBOARD_Y_MIN and n_boundary_curves(s.gmsh, tag) == 4:  # noqa: PLR2004
                 try:
                     ok = make_structured_quads_uv(
                         s.gmsh, tag, N_CHORD, N_SPAN, span_axis=1,

@@ -36,6 +36,35 @@ def apply_position(gmsh, dimtags: list[tuple[int, int]], position) -> None:
     gmsh.model.occ.affineTransform(list(dimtags), [float(v) for v in affine])
 
 
+def copy(gmsh, dimtags: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Return copies of the given entities (new dimtags)."""
+    return gmsh.model.occ.copy(list(dimtags))
+
+
+def mirror(gmsh, dimtags: list[tuple[int, int]], a: float, b: float, c: float,
+           d: float = 0.0) -> None:
+    """Reflect entities in-place about the plane a*x + b*y + c*z + d = 0.
+
+    A reflection is improper (it flips handedness), so it is not a rigid
+    ``Position``; use this for symmetry mirroring. For the XZ plane (y=0) use
+    ``(a, b, c, d) = (0, 1, 0, 0)``.
+    """
+    gmsh.model.occ.mirror(list(dimtags), float(a), float(b), float(c), float(d))
+
+
+def mirror_copy(gmsh, dimtags: list[tuple[int, int]], a: float, b: float, c: float,
+                d: float = 0.0) -> list[tuple[int, int]]:
+    """Copy the entities, reflect the copies about the plane, and return them.
+
+    Handy for building a symmetric half (e.g. the opposite wing across XZ)::
+
+        other_wing = mirror_copy(gmsh, [(3, wing)], 0, 1, 0, 0)  # mirror across y=0
+    """
+    new = gmsh.model.occ.copy(list(dimtags))
+    gmsh.model.occ.mirror(new, float(a), float(b), float(c), float(d))
+    return new
+
+
 def fragment(gmsh, dimtags_a: list[tuple[int, int]], dimtags_b: list[tuple[int, int]]):
     """Boolean-fragment two sets of entities (e.g. ``[(2, wing)]``, ``[(2, fuse)]``).
 
@@ -132,7 +161,8 @@ def describe_faces(gmsh, span_axis: int = 0, outboard_min: float | None = None) 
     print(f"[describe_faces] centroid[axis {span_axis}] range: "
           f"{cen_axis.min():.1f} .. {cen_axis.max():.1f}")
     if outboard_min is not None:
-        beyond = [f for f in info if f["centroid"][span_axis] > outboard_min]
+        # |centroid| so both sides (e.g. mirrored wings) are counted.
+        beyond = [f for f in info if abs(f["centroid"][span_axis]) > outboard_min]
         quad = [f for f in beyond if f["n_curves"] == 4]  # noqa: PLR2004
         print(f"[describe_faces] beyond {outboard_min} on axis {span_axis}: "
               f"{len(beyond)} faces, of which 4-sided: {len(quad)}")
