@@ -57,6 +57,9 @@ class WingSurface:
         reference_chord_fraction: Chord fraction of the straight, unswept
             reference line the sections are centred on and twisted about
             (0.25 = quarter chord).
+        scale: Uniform length multiplier applied to all coordinates (chord, span
+            and thickness). Handy for unit conversion, e.g. ``scale=1000`` turns a
+            WingShape defined in metres into millimetres.
         tol: Compatibility tolerance passed to the Gordon surface.
     """
 
@@ -67,6 +70,7 @@ class WingSurface:
         n_chord: int = 60,
         reference_chord_fraction: float = 0.25,
         chordwise_spacing: str = "arclength",
+        scale: float = 1.0,
         tol: float = 1e-6,
     ):
         if n_sections < 2:  # noqa: PLR2004
@@ -79,6 +83,7 @@ class WingSurface:
         self.n_sections = n_sections
         self.n_chord = n_chord
         self.reference_chord_fraction = reference_chord_fraction
+        self.scale = scale
         self.chordwise_spacing = chordwise_spacing
 
         # Shared chordwise sample stations (cosine: clustered at LE and TE).
@@ -169,7 +174,7 @@ class WingSurface:
         cos_t, sin_t = math.cos(twist_rad), math.sin(twist_rad)
         x_r = x * cos_t + z * sin_t
         z_r = -x * sin_t + z * cos_t
-        return Point(x_r, span_y, z_r)
+        return Point(self.scale * x_r, self.scale * span_y, self.scale * z_r)
 
     def _build_section(self, eta: float) -> tuple[InterpolatedLine, Point, Point, Point]:
         """Build one section and return (profile, le_point, te_point, reference_point)."""
