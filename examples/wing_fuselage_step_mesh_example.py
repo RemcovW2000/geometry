@@ -59,12 +59,16 @@ SPLIT_ETA = 0.2          # spanwise split between inboard and outboard
 # Here: rotate span Y->+X (so the wing sticks out the fuselage side), root at
 # the origin. Edit the origin/orientation to reposition on the fuselage.
 WING_POSITION = Position(
+    origin=Point(0.0, 0.0, -180),
+    orientation=Orientation(Vector(-1, 0, 0), Vector(0, -1, 0), Vector(0, 0, 1)),
+)
+FUSELAGE_POSITION = Position(
     origin=Point(0.0, 0.0, 0.0),
-    orientation=IDENTITY.rotate(-math.pi / 2, Vector(0.0, 0.0, 1.0)),
+    orientation=Orientation(Vector(0, -1, 0), Vector(-1, 0, 0), Vector(0, 0, -1)),
 )
 
 # Faces with centroid X beyond this are "outboard" (clear of the fuselage).
-OUTBOARD_X_MIN = 200.0
+OUTBOARD_Y_MIN = 200.0
 
 # Structured (outboard wing) mesh distribution.
 N_CHORD = 41                    # nodes around the chord (per side)
@@ -107,6 +111,9 @@ def main() -> None:
         imported = import_step(s.gmsh, STEP_PATH)
         fus = [tag for (dim, tag) in imported if dim == 3]
         print("imported fuselage solids:", fus)
+        fus_dimtags = [(3, t) for t in fus]
+        apply_position(s.gmsh, fus_dimtags, FUSELAGE_POSITION)
+        occ.synchronize()
 
         # 2. wing solids: BOTH inboard and outboard use the split-face loft so
         # their sections match at the split (otherwise the mismatch shreds the
@@ -137,16 +144,16 @@ def main() -> None:
         print("wrote wing_fuselage_fused.step")
 
         # DIAGNOSTIC: all faces after fuse.
-        describe_faces(s.gmsh, span_axis=0, outboard_min=OUTBOARD_X_MIN)
+        describe_faces(s.gmsh, span_axis=1, outboard_min=OUTBOARD_Y_MIN)
 
         # 4. structured quads on outboard wing faces, with chord/span distributions
         structured_faces: list[int] = []
         for tag in face_tags(s.gmsh):
-            cx = face_centroid(s.gmsh, tag)[0]
-            if cx > OUTBOARD_X_MIN and n_boundary_curves(s.gmsh, tag) == 4:  # noqa: PLR2004
+            cy = face_centroid(s.gmsh, tag)[1]
+            if cy > OUTBOARD_Y_MIN and n_boundary_curves(s.gmsh, tag) == 4:  # noqa: PLR2004
                 try:
                     ok = make_structured_quads_uv(
-                        s.gmsh, tag, N_CHORD, N_SPAN, span_axis=0,
+                        s.gmsh, tag, N_CHORD, N_SPAN, span_axis=1,
                         chord_law=CHORD_LAW, chord_coef=CHORD_COEF,
                         span_law=SPAN_LAW, span_coef=SPAN_COEF,
                     )
