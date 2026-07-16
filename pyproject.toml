@@ -20,6 +20,11 @@ dependencies = [
 # OpenCASCADE-backed CAD + unstructured meshing (geometry.occ). gmsh embeds
 # the OCCT kernel and is pip-installable on Linux/macOS (incl. Apple Silicon)/Windows.
 occ = ["gmsh>=4.13"]
+# Interactive viewer (geometry.viewer). The core is pure-Python; the PyVista
+# desktop frontend needs this extra. See docs/viewer_design.md.
+viewer = ["pyvista>=0.44"]
+# Planned web frontend (trame) — reuses the same Scene as the desktop viewer.
+viewer-web = ["pyvista>=0.44", "trame", "trame-vtk", "trame-vuetify", "trame-code"]
 
 [tool.setuptools_scm]
 
@@ -45,7 +50,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-geometry = ["py.typed", "aero/airfoils/*.txt"]
+geometry = ["py.typed", "aero/airfoils/*.txt", "viewer/static/*.html"]
 
 [tool.ruff]
 line-length = 100
@@ -56,6 +61,7 @@ ignore = [
     "E501", "PLR0913", "PLR0915", "UP007", "E731",
     "D203", "D213",
     "D107", "D105", "D104",
+    "D401",  # noun-phrase docstrings are fine for properties/attribute-like accessors
     "D405", "D406", "D407", "D411", "D414", "D416", "D417",
 ]
 
@@ -66,7 +72,8 @@ convention = "numpy"
 known-first-party = ["geometry"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["PLR2004", "D"]
+"tests/**" = ["PLR2004", "D", "PLC0415"]
+"examples/**" = ["PLC0415"]
 "**/__init__.py" = ["F401", "D104"]
 
 [tool.pytest.ini_options]

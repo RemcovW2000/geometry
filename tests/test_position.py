@@ -1,7 +1,7 @@
 import pytest
 
-from geometry.mesh import Node
 from geometry import Orientation, Point, Position, Vector
+from geometry.mesh import Node
 
 
 @pytest.mark.parametrize(
