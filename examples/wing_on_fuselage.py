@@ -21,7 +21,7 @@ fuselage = import_step(str(FUSELAGE_STEP_PATH), name="fuselage")[0]
 
 root_chord = 300
 semispan = 1500
-pylon_radius = root_chord * 0.9
+pylon_radius = 130
 wing_root_qq_position = Point(0, 0, 186)
 
 # ----------------------------------------------------------------------------------
@@ -40,7 +40,7 @@ shape = WingShape(
 surface = WingSurface(shape, n_sections=8, n_chord=50)
 
 # loft the wing between sections:
-us = np.linspace(0.0, 1.0, 8, endpoint=False)
+us = np.linspace(0.0, 1.0, 100, endpoint=False)
 sections = [
     [profile.point_at_parameter(float(u)) for u in us] for profile in
     surface.profiles
@@ -57,10 +57,10 @@ left_wing_solid = right_wing_solid.mirrored(0.0, 1.0, 0.0, -wing_root_qq_positio
 # ----------------------------------------------------------------------------------
 # --- pylon: a cylinder sticking out of the fuselage into the wing ----------
 pylon = Solid.cylinder(
-    base=Point(wing_root_qq_position.x, wing_root_qq_position.y, 0),  # rooted inside the body
+    base=Point(wing_root_qq_position.x, wing_root_qq_position.y, 150),  # rooted inside the body
     axis=Vector(0.0, 0.0, 1.0),
     radius=pylon_radius,
-    height=300,
+    height=50,
     name="pylon",
 )
 

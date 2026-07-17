@@ -98,6 +98,8 @@ class ViewerServer:
                 return self.store.get()
             finally:
                 Path(out_path).unlink(missing_ok=True)
+            if completed.stderr.strip():
+                print(completed.stderr.strip())  # surface the runner's progress log
             self.store.set(document)
             return self.store.get()
         finally:

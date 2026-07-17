@@ -17,6 +17,9 @@ belongs to -- no more raw (dim, tag) bookkeeping.
 """
 from __future__ import annotations
 
+import sys
+import time
+
 import numpy as np
 
 from geometry.occ.session import ensure_session
@@ -38,21 +41,30 @@ VERTEX_COLOR = "#e06666"
 HISTORY_COLOR = "#b58fd6"
 
 _tessellated = False
+_tessellation_error: str | None = None
 
 
 def _reset_tessellation() -> None:
-    global _tessellated  # noqa: PLW0603  (per-scene cache flag)
+    global _tessellated, _tessellation_error  # noqa: PLW0603  (per-scene cache)
     _tessellated = False
+    _tessellation_error = None
 
 
 register_scene_hook(_reset_tessellation)
 
 
-def _ensure_display_mesh() -> None:
-    """Generate a curvature-adaptive 2D mesh of the whole model, once per scene."""
-    global _tessellated  # noqa: PLW0603  (per-scene cache flag)
+def _ensure_display_mesh() -> str | None:
+    """Generate a curvature-adaptive 2D mesh of the whole model, once per scene.
+
+    Runs *at most once* per scene build -- also when it fails (the failure is
+    remembered and returned, never retried per face). Progress and timing go
+    to stderr so a slow tessellation is visible, not a silent hang.
+    """
+    global _tessellated, _tessellation_error  # noqa: PLW0603  (per-scene cache)
     if _tessellated:
-        return
+        return _tessellation_error
+    _tessellated = True  # set FIRST: even a failure must not trigger retries
+
     gmsh = ensure_session()
     gmsh.model.occ.synchronize()
     # Size the display mesh from the model extent + curvature.
@@ -66,9 +78,26 @@ def _ensure_display_mesh() -> None:
     gmsh.option.setNumber("Mesh.MeshSizeMax", diag / 25.0)
     gmsh.option.setNumber("Mesh.MeshSizeMin", diag / 400.0)
     gmsh.option.setNumber("General.Verbosity", 1)
-    gmsh.model.mesh.clear()
-    gmsh.model.mesh.generate(2)
-    _tessellated = True
+
+    print("viewer: generating display mesh...", file=sys.stderr, flush=True)
+    started = time.perf_counter()
+    try:
+        gmsh.model.mesh.clear()
+        gmsh.model.mesh.generate(2)
+    except Exception as error:  # noqa: BLE001  (bad CAD: report, don't hang)
+        _tessellation_error = f"display meshing failed: {error}"
+        print(f"viewer: {_tessellation_error}", file=sys.stderr, flush=True)
+        return _tessellation_error
+
+    n_nodes = len(gmsh.model.mesh.getNodes()[0])
+    elapsed = time.perf_counter() - started
+    print(f"viewer: display mesh ready ({n_nodes} nodes, {elapsed:.1f} s)",
+          file=sys.stderr, flush=True)
+    if n_nodes > 500_000:  # noqa: PLR2004  (display-budget heuristic)
+        print("viewer: WARNING very large display mesh -- the page will be slow; "
+              "check for degenerate geometry or extreme size ratios",
+              file=sys.stderr, flush=True)
+    return None
 
 
 def _entity_mesh(dim: int, tag: int, element_type: int, nodes_per_element: int):
@@ -143,6 +172,9 @@ def _face_node(face: Face) -> ViewNode:
 def _solid_node(solid: Solid) -> ViewNode:
     kind = "Solid" if solid.provenance is None else f"Solid · {solid.provenance.name}"
     meta = {"tag": solid.tag, "volume": round(solid.volume, 6)}
+    display_error = _ensure_display_mesh()
+    if display_error:
+        meta["display_error"] = display_error
     children = [ViewNode(label="faces", kind="group",
                          children=[_face_node(f) for f in solid.faces])]
     if solid.provenance is not None:
