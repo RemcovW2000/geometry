@@ -255,3 +255,118 @@ def extract_mesh(gmsh) -> Mesh:
         for row in conn:
             elements.append(Element([tag_to_node[int(t)] for t in row]))
     return Mesh(nodes, elements)
+
+
+# ---------------------------------------------------------------------------
+# Volume meshing with entity-linked mesh regions ("subgrids")
+# ---------------------------------------------------------------------------
+
+#: gmsh volume element type -> nodes per element (linear tets only for now).
+_VOLUME_NODES_PER_ELEMENT = {4: 4}
+
+
+class RegionMesh:
+    """The part of a mesh lying on one or more geometry entities (a *subgrid*).
+
+    Both ``nodes`` and ``facets`` reference the very same :class:`Node` objects
+    as the parent mesh -- a facet is a new :class:`Element` over existing
+    nodes. That is what makes layered modelling possible: a composite shell
+    coating on a solid's face can be built directly on ``facets`` and shares
+    its DOFs with the solid elements automatically (no coupling needed).
+
+    Attributes:
+        name: region label.
+        nodes: mesh nodes on the entities (shared with the parent mesh).
+        facets: boundary elements on the entities -- triangles/quads for faces,
+            2-node segments for edges -- over the shared nodes.
+    """
+
+    def __init__(self, name: str, nodes: list[Node], facets: list[Element]):
+        self.name = name
+        self.nodes = nodes
+        self.facets = facets
+
+    def __repr__(self) -> str:
+        return f"RegionMesh({self.name!r}, n_nodes={len(self.nodes)}, n_facets={len(self.facets)})"
+
+
+class MeshedModel:
+    """A mesh extracted from gmsh plus the tag bookkeeping to query regions.
+
+    Returned by :func:`generate_volume_mesh`. ``mesh`` holds the volume
+    elements; :meth:`region` resolves geometry entities (``geometry.occ.shapes``
+    Faces/Edges/Solids or raw ``(dim, tag)`` pairs) to the mesh nodes and
+    boundary facets that lie on them, sharing Node objects with ``mesh``.
+    """
+
+    def __init__(self, gmsh, mesh: Mesh, tag_to_node: dict[int, Node]):
+        self._gmsh = gmsh
+        self.mesh = mesh
+        self._tag_to_node = tag_to_node
+
+    def region(self, *entities, name: str = "region") -> RegionMesh:
+        """The mesh nodes + facets on the given faces/edges (shared Node objects).
+
+        Args:
+            entities: ``geometry.occ.shapes`` Shape objects (Face, Edge, Solid)
+                or raw gmsh ``(dim, tag)`` tuples.
+            name: label for the region.
+        """
+        gmsh = self._gmsh
+        dimtags = [e if isinstance(e, tuple) else e.dimtag for e in entities]
+
+        node_ids: dict[int, Node] = {}
+        facets: list[Element] = []
+        for dim, tag in dimtags:
+            tags, _, _ = gmsh.model.mesh.getNodes(dim, tag, includeBoundary=True,
+                                                  returnParametricCoord=False)
+            for t in tags:
+                node_ids.setdefault(int(t), self._tag_to_node[int(t)])
+            if dim in (1, 2):
+                per_type = {1: 2, 2: 3, 3: 4}  # segment, triangle, quad node counts
+                etypes, _, enodes = gmsh.model.mesh.getElements(dim, tag)
+                for etype, raw in zip(etypes, enodes):
+                    npe = per_type.get(int(etype))
+                    if npe is None:
+                        continue
+                    table = np.asarray(raw, dtype=int).reshape(-1, npe)
+                    for row in table:
+                        facets.append(Element([self._tag_to_node[int(t)] for t in row]))
+        return RegionMesh(name, list(node_ids.values()), facets)
+
+
+def generate_volume_mesh(
+    gmsh, size_max: float | None = None, size_min: float | None = None
+) -> MeshedModel:
+    r"""Generate a 3-D (tet) mesh of the model and return it with region access.
+
+    The returned :class:`MeshedModel` contains the volume mesh (linear
+    tetrahedra as 4-node :class:`Element`\ s) and can resolve per-entity
+    regions: gmsh meshes every face before filling the volume, so each face's
+    triangles exist and conform to the tets -- ``model.region(face)`` returns
+    them as facets over the *same* node objects.
+    """
+    set_mesh_size(gmsh, size_max, size_min)
+    gmsh.model.mesh.generate(3)
+
+    node_tags, coords, _ = gmsh.model.mesh.getNodes()
+    coords = np.asarray(coords, dtype=float).reshape(-1, 3)
+    tag_to_node: dict[int, Node] = {}
+    nodes: list[Node] = []
+    for tag, c in zip(node_tags, coords):
+        node = Node(float(c[0]), float(c[1]), float(c[2]))
+        tag_to_node[int(tag)] = node
+        nodes.append(node)
+
+    elements: list[Element] = []
+    etypes, _etags, enodes = gmsh.model.mesh.getElements(dim=3)
+    for etype, raw in zip(etypes, enodes):
+        npe = _VOLUME_NODES_PER_ELEMENT.get(int(etype))
+        if npe is None:
+            continue
+        table = np.asarray(raw, dtype=int).reshape(-1, npe)
+        for row in table:
+            elements.append(Element([tag_to_node[int(t)] for t in row]))
+    if not elements:
+        raise RuntimeError("volume meshing produced no tetrahedra")
+    return MeshedModel(gmsh, Mesh(nodes, elements), tag_to_node)
