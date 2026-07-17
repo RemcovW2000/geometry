@@ -54,18 +54,24 @@ class SceneStore:
 class ViewerServer:
     """Own the scene store, the rebuild subprocess, and the optional file watcher."""
 
-    def __init__(self, script: str | Path, port: int = 8735, watch: bool = False):
-        self.script = Path(script).resolve()
-        if not self.script.exists():
+    def __init__(self, script: str | Path | None, port: int = 8735, watch: bool = False,
+                 initial_document: dict | None = None):
+        self.script = Path(script).resolve() if script is not None else None
+        if self.script is not None and not self.script.exists():
             raise FileNotFoundError(self.script)
         self.port = port
-        self.watch = watch
+        self.watch = watch and self.script is not None
         self.store = SceneStore()
+        if initial_document is not None:
+            self.store.set(initial_document)
 
     # -- rebuilding -------------------------------------------------------- #
 
     def rebuild(self) -> dict:
         """Run the user script in a fresh subprocess and swap in its scene."""
+        if self.script is None:
+            return {**self.store.get(),
+                    "error": "rebuild unavailable: the scene did not come from a script file"}
         self.store.building = True
         try:
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as handle:
@@ -113,7 +119,8 @@ class ViewerServer:
 
     def serve_forever(self, open_browser: bool = True) -> None:
         """Start the HTTP server (blocking); initial build runs in the background."""
-        threading.Thread(target=self.rebuild, daemon=True).start()
+        if self.script is not None and self.store.version == 0:
+            threading.Thread(target=self.rebuild, daemon=True).start()
         if self.watch:
             threading.Thread(target=self._watch_loop, daemon=True).start()
 

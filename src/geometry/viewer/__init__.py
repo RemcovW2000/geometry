@@ -1,17 +1,25 @@
 """Interactive geometry viewer: type code, see it in the browser, click to inspect.
 
-The primary frontend is the **browser viewer**: point it at a script that
-defines ``build() -> list`` of displayable objects and it serves a three.js
-page with a 3D view and an object tree (faces, edges, curves, points...)::
+The explicit API: what you pass to the :class:`Viewer` is what is shown ::
+
+    from geometry.viewer import Viewer
+
+    Viewer([wing, pylon_mesh, my_curve]).show()     # python my_script.py
+
+``show()`` serves a three.js page with a 3D view and an object tree (faces,
+edges, curves, points, build history...). Hit save in your IDE (or the Rebuild
+button) and the page updates: the script is re-run in a fresh subprocess and
+its ``show()`` call feeds the new scene back instead of serving again.
+
+The CLI form works too, for scripts that define ``build() -> list``::
 
     python -m geometry.viewer my_geometry.py --watch
 
-Hit save in your IDE (or the Rebuild button) and the page updates. Objects are
-displayable when they subclass :class:`~geometry.viewer.base.Viewable` (with
+Objects are displayable when they subclass
+:class:`~geometry.viewer.base.Viewable` (with
 :class:`~geometry.viewer.base.Child`-declared children) or have a registered
 adapter -- built-ins cover ``Point``, curves, ``GordonSurface``/``GordonPatch``,
-``WingSurface``, ``Mesh`` and the gmsh shape API
-(:mod:`geometry.occ.shapes`).
+``WingSurface``, ``Mesh`` and the gmsh shape API (:mod:`geometry.occ.shapes`).
 
 The older PyVista desktop frontend (:class:`Scene` + :func:`view`) is still
 available and needs the ``viewer`` extra.
@@ -31,6 +39,7 @@ from geometry.viewer.base import (
 from geometry.viewer.hierarchy import Hierarchy, HierarchyNode
 from geometry.viewer.ids import SceneId
 from geometry.viewer.scene import Scene
+from geometry.viewer.viewer import Viewer
 
 
 def view(scene: Scene, **kwargs) -> object:
@@ -51,6 +60,7 @@ def serve(script: str, port: int = 8735, watch: bool = True, open_browser: bool 
 
 
 __all__ = [
+    "Viewer",
     "Viewable",
     "Child",
     "ViewNode",

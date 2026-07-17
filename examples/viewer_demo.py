@@ -1,13 +1,16 @@
 """Demo scene for the browser viewer.
 
 Run:
-    python -m geometry.viewer examples/viewer_demo.py --watch
+    python examples/viewer_demo.py
 
 Then edit this file (change a chord, move a point, ...) and save: the page
 rebuilds and shows the new geometry. The tree on the left mirrors the object
 hierarchy: the Gordon patch contains its boundary curves, each curve its
 defining points; the gmsh solid (if gmsh is installed) contains faces, the
-faces edges, and so on.
+faces edges, and so on -- plus a hidden-by-default "history" node showing what
+each solid was built from.
+
+(The CLI form still works too: python -m geometry.viewer examples/viewer_demo.py --watch)
 """
 import numpy as np
 
@@ -62,5 +65,11 @@ def _gmsh_part():
 
 
 def build() -> list:
-    """The viewer contract: return the objects to display."""
+    """The objects to display."""
     return [_gordon_panel(), *_gmsh_part()]
+
+
+if __name__ == "__main__":
+    from geometry.viewer import Viewer
+
+    Viewer(build(), name="viewer_demo").show()

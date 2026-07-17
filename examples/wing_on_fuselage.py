@@ -8,16 +8,14 @@ has no interior faces and a surface mesh is conformal across the junctions.
 All placement is derived from the fuselage's bounding box, so the same script
 works whatever the STEP file's units or size.
 
-View it (and edit-save-rebuild) with:
-
-    python -m geometry.viewer examples/wing_on_fuselage.py --watch
-
-or run standalone to fuse + mesh + export:
+Run it directly -- the Viewer shows exactly what it is given (the fused
+airframe AND its surface mesh), and rebuilds on save:
 
     python examples/wing_on_fuselage.py
 
-Set ``FILLET_RADIUS`` (as a fraction of the pylon radius) to attempt a smooth
-OCC blend on the junction edges. Fillets on free-form intersections are
+Set ``SHOW_MESH = False`` to skip meshing on each rebuild, and
+``FILLET_RADIUS`` (as a fraction of the pylon radius) to attempt a smooth OCC
+blend on the junction edges. Fillets on free-form intersections are
 temperamental -- if OCC refuses, the plain union is kept.
 """
 from __future__ import annotations
@@ -36,6 +34,7 @@ from geometry.occ.shapes import Solid, fillet, fuse, import_step
 FUSELAGE_STEP = Path(__file__).parent.parent / "data" / "simplified_fuselage_solid.step"
 
 FILLET_RADIUS: float | None = None  # e.g. 0.25 -> fillet radius = 0.25 * pylon radius
+SHOW_MESH = False                    # surface-mesh the airframe and show it too
 
 
 def build_wing_surface(root_chord: float, semispan: float) -> WingSurface:
@@ -62,7 +61,28 @@ def wing_solid(surface: WingSurface, n_loop: int = 70) -> Solid:
 
 
 def build() -> list:
-    """Viewer entry point: the merged airframe (fuselage + pylon + wing)."""
+    """Build the scene: the merged airframe, plus its surface mesh if enabled."""
+    airframe = build_airframe()
+    objects: list = [airframe]
+    if SHOW_MESH:
+        objects.append(surface_mesh(airframe))
+    return objects
+
+
+def surface_mesh(airframe: Solid):
+    """Surface-mesh the airframe skin; the returned Mesh is itself viewable."""
+    from geometry.occ.meshing import generate_surface_mesh, set_curvature_sizing
+    from geometry.occ.session import ensure_session
+
+    gmsh = ensure_session()
+    lo, hi = airframe.bounding_box
+    diag = float(np.linalg.norm(np.subtract([hi.x, hi.y, hi.z], [lo.x, lo.y, lo.z])))
+    set_curvature_sizing(gmsh, n_per_2pi=24)
+    return generate_surface_mesh(gmsh, size_max=diag / 40)
+
+
+def build_airframe() -> Solid:
+    """The merged airframe: fuselage + pylon + both wing halves, one solid."""
     fuselage = import_step(str(FUSELAGE_STEP), name="fuselage")[0]
 
     # --- derive all dimensions from the fuselage ------------------------------
@@ -72,7 +92,7 @@ def build() -> list:
     center_x = 0.5 * (lo.x + hi.x)
     center_y = 0.5 * (lo.y + hi.y)
 
-    root_chord = 0.22 * length
+    root_chord = 0.3 * length
     semispan = 0.55 * length
     pylon_radius = 0.16 * root_chord
     pylon_top = hi.z + 0.25 * height          # how far the wing sits above the skin
@@ -105,7 +125,7 @@ def build() -> list:
     if FILLET_RADIUS is not None:
         airframe = _try_fillet(airframe, center_x, center_y, hi.z, pylon_radius)
 
-    return [airframe]
+    return airframe
 
 
 def _try_fillet(airframe: Solid, cx: float, cy: float, top_z: float,
@@ -134,29 +154,10 @@ def _try_fillet(airframe: Solid, cx: float, cy: float, top_z: float,
         return airframe
 
 
-def main() -> None:
-    """Standalone: build, report topology, surface-mesh, export STEP."""
-    from geometry.occ.meshing import generate_surface_mesh, set_curvature_sizing
-    from geometry.occ.session import ensure_session
-    from geometry.occ.shapes import export_step
-
-    (airframe,) = build()
-    print(f"{airframe}: volume={airframe.volume:.4g}")
-    print(f"  faces: {len(airframe.faces)}  edges: {len(airframe.edges)}")
-    for face in airframe.faces:
-        print(f"    {face.name}: {face.kind}, area={face.area:.4g}")
-
-    gmsh = ensure_session()
-    lo, hi = airframe.bounding_box
-    diag = float(np.linalg.norm(np.subtract([hi.x, hi.y, hi.z], [lo.x, lo.y, lo.z])))
-    set_curvature_sizing(gmsh, n_per_2pi=24)
-    mesh = generate_surface_mesh(gmsh, size_max=diag / 40)
-    print(f"surface mesh: {len(mesh.nodes)} nodes, {len(mesh.elements)} elements")
-
-    out = Path(__file__).parent / "wing_on_fuselage.step"
-    export_step(str(out))œ
-    print(f"wrote {out}")
-
-
 if __name__ == "__main__":
-    main()
+    from geometry.viewer import Viewer
+
+    # Explicit: what is passed to the Viewer is exactly what the browser shows.
+    # show() serves the page; on save, the script re-runs and show() feeds the
+    # new scene back automatically.
+    Viewer(build(), name="wing_on_fuselage").show()

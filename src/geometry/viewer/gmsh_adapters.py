@@ -20,9 +20,10 @@ from __future__ import annotations
 import numpy as np
 
 from geometry.occ.session import ensure_session
-from geometry.occ.shapes import Edge, Face, Shape, Solid, Vertex
+from geometry.occ.shapes import Edge, Face, Operation, Shape, Solid, Vertex
 from geometry.viewer.base import (
     ViewNode,
+    _find_adapter,
     mesh_payload,
     points_payload,
     polyline_payload,
@@ -34,6 +35,7 @@ from geometry.viewer.base import (
 FACE_COLOR = "#8fa8bf"
 EDGE_COLOR = "#e8b34b"
 VERTEX_COLOR = "#e06666"
+HISTORY_COLOR = "#b58fd6"
 
 _tessellated = False
 
@@ -139,12 +141,57 @@ def _face_node(face: Face) -> ViewNode:
 
 
 def _solid_node(solid: Solid) -> ViewNode:
+    kind = "Solid" if solid.provenance is None else f"Solid · {solid.provenance.name}"
+    meta = {"tag": solid.tag, "volume": round(solid.volume, 6)}
+    children = [ViewNode(label="faces", kind="group",
+                         children=[_face_node(f) for f in solid.faces])]
+    if solid.provenance is not None:
+        meta.update(solid.provenance.params)
+        children.append(_history_node(solid.provenance))
+    return ViewNode(label=solid.name, kind=kind, meta=meta, children=children)
+
+
+# -- build history ------------------------------------------------------------ #
+
+def _history_node(op: Operation) -> ViewNode:
+    """The build-history subtree for an operation: its inputs, recursively.
+
+    Consumed shape handles are shown as structure + parameters (their geometry
+    is gone from the model), but pure-data inputs -- loft section loops, source
+    curves/surfaces -- are still drawn (hidden by default).
+    """
+    children = [_input_node(inp, index) for index, inp in enumerate(op.inputs)]
     return ViewNode(
-        label=solid.name, kind="Solid",
-        meta={"tag": solid.tag, "volume": round(solid.volume, 6)},
-        children=[ViewNode(label="faces", kind="group",
-                           children=[_face_node(f) for f in solid.faces])],
+        label=f"history: {op.name}", kind="operation",
+        meta={key: value for key, value in op.params.items()},
+        children=children, visible=False,
     )
+
+
+def _input_node(inp, index: int) -> ViewNode:
+    """One operation input as a tree node."""
+    if isinstance(inp, Shape):
+        meta = {"note": "consumed by this operation"}
+        children = []
+        if inp.provenance is not None:
+            meta.update(inp.provenance.params)
+            children.append(_history_node(inp.provenance))
+            kind = f"{type(inp).__name__} · {inp.provenance.name}"
+        else:
+            kind = type(inp).__name__
+        return ViewNode(label=inp.name, kind=kind, meta=meta,
+                        children=children, visible=False)
+    if isinstance(inp, (list, tuple)) and inp and hasattr(inp[0], "x"):
+        # A point loop (e.g. a loft section): draw it as a closed polyline.
+        return ViewNode(label=f"section{index}", kind="section",
+                        geoms=[polyline_payload([*inp, inp[0]], HISTORY_COLOR)],
+                        visible=False)
+    adapter = _find_adapter(inp)
+    if adapter is not None:
+        node = adapter(inp)
+        node.visible = False
+        return node
+    return ViewNode(label=repr(inp)[:60], kind="input", visible=False)
 
 
 # Later registrations win, so the generic fallback goes first.

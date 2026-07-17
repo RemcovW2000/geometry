@@ -54,18 +54,29 @@ interface topology), which is what a conformal FEM mesh needs.
 
 ## Browser viewer (`geometry.viewer`)
 
-Write geometry code in your IDE, see it live in the browser:
+Write geometry code in your IDE, see it live in the browser. The API is
+explicit — what you pass to the `Viewer` is what is shown:
 
-```bash
-python -m geometry.viewer examples/viewer_demo.py --watch
+```python
+from geometry.viewer import Viewer
+
+airframe = ...   # shapes, surfaces, curves, meshes, Viewable objects
+mesh = ...
+Viewer([airframe, mesh]).show()     # python my_script.py
 ```
 
-The script must define `build() -> list` returning displayable objects. Save
-the file (or hit **Rebuild**) and the page updates — each rebuild runs in a
-fresh subprocess, so crashes just show a traceback in the page. The tree panel
-mirrors the object hierarchy (a solid's faces, a face's edges, a Gordon
-surface's profile curves, a curve's points, ...); clicking geometry selects the
-tree node and shows its metadata (areas, lengths, tags).
+Save the file (or hit **Rebuild**) and the page updates: the script is re-run
+in a fresh subprocess whose `show()` call feeds the new scene back instead of
+serving (so crashes just show a traceback in the page). The CLI form for
+`build() -> list` scripts also works:
+`python -m geometry.viewer examples/viewer_demo.py --watch`.
+
+The tree panel mirrors the object hierarchy (a solid's faces, a face's edges,
+a Gordon surface's profile curves, a curve's points, ...); clicking geometry
+selects the tree node and shows its metadata (areas, lengths, tags). Solids
+also carry their **build history**: a fused airframe shows the fuselage, pylon
+and wings that went into the `fuse`; a lofted wing shows its input section
+curves (drawn, hidden by default) — the full provenance chain, recursively.
 
 Built-in adapters cover `Point`, curves, `GordonPatch`/`GordonSurface`,
 `WingSurface`, `Mesh`, and the gmsh shape API. Your own composite objects

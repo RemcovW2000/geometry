@@ -125,13 +125,19 @@ def _xyz(p) -> tuple[float, float, float]:
 
 @dataclass
 class ViewNode:
-    """One node of the viewer tree: label + render geometry + children."""
+    """One node of the viewer tree: label + render geometry + children.
+
+    ``visible=False`` nodes start hidden in the browser (their eye toggle is
+    off) -- used e.g. for build-history geometry so it doesn't clutter the
+    view but is one click away.
+    """
 
     label: str
     kind: str = "object"
     geoms: list[dict] = field(default_factory=list)
     children: list[ViewNode] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    visible: bool = True
 
     def to_dict(self, node_id: str = "0") -> dict:
         """Serialize the subtree with hierarchical ids ('0', '0/2', ...)."""
@@ -141,6 +147,7 @@ class ViewNode:
             "kind": self.kind,
             "meta": self.meta,
             "geoms": self.geoms,
+            "visible": self.visible,
             "children": [
                 child.to_dict(f"{node_id}/{i}") for i, child in enumerate(self.children)
             ],

@@ -152,6 +152,7 @@ function makeGeometry(geom) {
 function buildGroups(node, parentGroup) {
   const group = new THREE.Group();
   group.name = node.id;
+  group.visible = node.visible !== false;
   parentGroup.add(group);
   const objects = [];
   for (const geom of node.geoms || []) {
@@ -160,7 +161,7 @@ function buildGroups(node, parentGroup) {
     obj.userData.baseColor = obj.material.color.getHex();
     group.add(obj); objects.push(obj);
   }
-  nodesById.set(node.id, { node, group, objects, rowEl: null, visible: true });
+  nodesById.set(node.id, { node, group, objects, rowEl: null, visible: group.visible });
   for (const child of node.children || []) buildGroups(child, group);
 }
 
@@ -174,6 +175,7 @@ function buildTree(node, container, depth) {
   const caret = document.createElement('span'); caret.className = 'caret';
   caret.textContent = (node.children && node.children.length) ? '▸' : '';
   const eye = document.createElement('span'); eye.className = 'eye'; eye.textContent = '👁';
+  if (!entry.visible) eye.classList.add('off');
   const label = document.createElement('span'); label.className = 'label'; label.textContent = node.label;
   const kind = document.createElement('span'); kind.className = 'kind'; kind.textContent = node.kind;
   row.append(caret, eye, label, kind);
@@ -339,7 +341,13 @@ async function poll() {
 
 document.getElementById('rebuild').addEventListener('click', async () => {
   statusEl.textContent = 'building…'; statusEl.classList.add('building');
-  await fetch('/rebuild', { method: 'POST' });
+  const response = await fetch('/rebuild', { method: 'POST' });
+  const result = await response.json();
+  if (result.error && result.version === knownVersion) {
+    document.getElementById('error-text').textContent = result.error;
+    document.getElementById('error').style.display = 'block';
+    statusEl.textContent = 'rebuild failed'; statusEl.classList.remove('building');
+  }
 });
 
 poll();
