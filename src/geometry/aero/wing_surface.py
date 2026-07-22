@@ -204,6 +204,15 @@ class WingSurface:
         )
         return profile, le_point, te_point, ref_point
 
+    def section_curve(self, eta: float) -> InterpolatedLine:
+        """The section profile at eta as a Curve (TE -> LE -> TE, LE at u = 0.5).
+
+        This is the exact curve the section samples come from -- hand it to e.g.
+        ``HoernerTip`` so both geometries reference the same profile.
+        """
+        profile, *_ = self._build_section(eta)
+        return profile
+
     def section_loop(self, eta: float, n_loop: int = 80) -> list[Point]:
         """Closed airfoil loop (TE->LE->TE) at an arbitrary span fraction eta.
 

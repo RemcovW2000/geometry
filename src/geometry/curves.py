@@ -285,3 +285,47 @@ class TrimmedCurve(Curve):
     def transform(self, position: Position) -> "TrimmedCurve":
         """Transform the trimmed curve without changing its parameter trimming."""
         return TrimmedCurve(self.base_curve.transform(position), self.u_start, self.u_end)
+
+
+class IsoCurve(Curve):
+    """A surface iso-parameter line as a Curve, referencing the surface directly.
+
+    Fix exactly one of ``u`` or ``v``: ``IsoCurve(surface, v=0.3)`` is the curve
+    ``t -> surface.point_at_parameter(t, 0.3)``. No geometry is copied, so the
+    curve always matches the surface exactly -- the basis for sewing surfaces.
+    """
+
+    def __init__(self, surface, u: float | None = None, v: float | None = None):
+        if (u is None) == (v is None):
+            raise ValueError("fix exactly one of u or v")
+        self.surface = surface
+        self.u = u
+        self.v = v
+        self.start = self.point_at_parameter(0.0)
+        self.end = self.point_at_parameter(1.0)
+
+    def point_at_parameter(self, t: float) -> Point:
+        if self.u is not None:
+            return self.surface.point_at_parameter(self.u, float(t))
+        return self.surface.point_at_parameter(float(t), self.v)
+
+    def parameter_at_point(self, point: Point, tol: float = 1e-6,
+                           n_initial_samples: int = 200) -> float:
+        """Closest-parameter search by dense sampling + local refinement."""
+        target = point.as_array()
+        ts = np.linspace(0.0, 1.0, n_initial_samples)
+        d = [np.linalg.norm(self.point_at_parameter(t).as_array() - target) for t in ts]
+        i = int(np.argmin(d))
+        lo, hi = ts[max(0, i - 1)], ts[min(len(ts) - 1, i + 1)]
+        for _ in range(60):  # golden-section refinement
+            m1, m2 = lo + 0.382 * (hi - lo), lo + 0.618 * (hi - lo)
+            d1 = np.linalg.norm(self.point_at_parameter(m1).as_array() - target)
+            d2 = np.linalg.norm(self.point_at_parameter(m2).as_array() - target)
+            lo, hi = (lo, m2) if d1 < d2 else (m1, hi)
+        t_best = 0.5 * (lo + hi)
+        if np.linalg.norm(self.point_at_parameter(t_best).as_array() - target) > tol:
+            raise ToleranceError("point is not on the iso-curve within tolerance")
+        return float(t_best)
+
+    def transform(self, position: Position) -> "Curve":
+        raise NotImplementedError("IsoCurve references a surface; transform the surface")

@@ -8,8 +8,10 @@ from geometry.aero.utils import (
 )
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
+from geometry.aero.wingtip import HoernerTip
 
 __all__ = [
+    "HoernerTip",
     "CSTPolynomial",
     "bernstein_poly",
     "cosine_spacing",

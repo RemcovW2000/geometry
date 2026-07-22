@@ -3,10 +3,39 @@ from scipy.interpolate import make_interp_spline
 
 from geometry.errors import ConstructionError
 from geometry import Point
-from geometry.curves import Curve, InterpolatedLine
+from geometry.curves import Curve, InterpolatedLine, IsoCurve
 
 
-class GordonPatch:
+class Surface:
+    """Base for parametric surfaces mapping (u, v) in [0, 1]^2 to points."""
+
+    def point_at_parameter(self, u: float, v: float) -> Point:
+        raise NotImplementedError
+
+    def sample_grid(self, n_u: int = 20, n_v: int = 20) -> np.ndarray:
+        """Sample the surface on a regular (n_u, n_v, 3) grid."""
+        grid = np.zeros((n_u, n_v, 3), dtype=float)
+        for a, u in enumerate(np.linspace(0.0, 1.0, n_u)):
+            for b, v in enumerate(np.linspace(0.0, 1.0, n_v)):
+                pt = self.point_at_parameter(u, v)
+                grid[a, b] = [pt.x, pt.y, pt.z]
+        return grid
+
+    def iso_u(self, u: float) -> IsoCurve:
+        """The curve of constant u (varying v), referencing this surface."""
+        return IsoCurve(self, u=u)
+
+    def iso_v(self, v: float) -> IsoCurve:
+        """The curve of constant v (varying u), referencing this surface."""
+        return IsoCurve(self, v=v)
+
+    def trimmed(self, u: tuple[float, float] = (0.0, 1.0),
+                v: tuple[float, float] = (0.0, 1.0)) -> "TrimmedSurface":
+        """Rectangular parameter-space trim, reparameterized to [0, 1]^2."""
+        return TrimmedSurface(self, u=u, v=v)
+
+
+class GordonPatch(Surface):
     """A Gordon surface patch defined by exactly 2 u-lines and 2 v-lines.
 
     The patch interpolates between the boundary curves using the Gordon formula:
@@ -145,7 +174,7 @@ class GordonPatch:
         return grid
 
 
-class GordonSurface:
+class GordonSurface(Surface):
     """A Gordon surface interpolating a compatible network of curves.
 
     The surface is the Boolean sum of three surfaces (Gordon 1969):
@@ -313,6 +342,87 @@ class GordonSurface:
                 pt = self.point_at_parameter(u, v)
                 grid[a, b] = [pt.x, pt.y, pt.z]
         return grid
+
+
+class TrimmedSurface(Surface):
+    """A rectangular parameter-space trim of a surface, reparameterized to [0, 1]^2.
+
+    References the base surface directly (no geometry is copied), so e.g.
+    ``TrimmedSurface(s, v=(0, 0.9)).iso_v(1.0)`` is exactly ``s.iso_v(0.9)``.
+    """
+
+    def __init__(self, base: Surface, u: tuple[float, float] = (0.0, 1.0),
+                 v: tuple[float, float] = (0.0, 1.0)):
+        for name, (lo, hi) in (("u", u), ("v", v)):
+            if not (0.0 <= lo < hi <= 1.0):
+                raise ValueError(f"{name} range must satisfy 0 <= lo < hi <= 1, got {(lo, hi)}")
+        self.base = base
+        self.u_range = (float(u[0]), float(u[1]))
+        self.v_range = (float(v[0]), float(v[1]))
+
+    def point_at_parameter(self, u: float, v: float) -> Point:
+        u0, u1 = self.u_range
+        v0, v1 = self.v_range
+        return self.base.point_at_parameter(u0 + (u1 - u0) * float(u),
+                                            v0 + (v1 - v0) * float(v))
+
+
+class SewnSurface(Surface):
+    """Surfaces stitched along one parameter direction into a single surface.
+
+    The pieces are traversed in order as the ``along`` parameter runs 0 -> 1;
+    adjacent pieces must share their boundary curve (piece i at along=1 equals
+    piece i+1 at along=0), which is checked on construction. Ideally the pieces
+    literally reference the same curve (e.g. a tip cap built on
+    ``wing.iso_v(eta)``), making the seam exact by construction.
+
+    Args:
+        surfaces: the pieces, in order.
+        along: "v" (default) or "u" -- the direction of concatenation.
+        breaks: global parameter values of the seams, length ``len(surfaces)+1``,
+            from 0 to 1. Default: equal spans.
+        tol: seam-matching tolerance.
+    """
+
+    def __init__(self, surfaces: list[Surface], along: str = "v",
+                 breaks: list[float] | None = None, tol: float = 1e-6):
+        if along not in ("u", "v"):
+            raise ValueError("along must be 'u' or 'v'")
+        if len(surfaces) < 2:  # noqa: PLR2004
+            raise ValueError("SewnSurface needs at least two surfaces")
+        self.surfaces = list(surfaces)
+        self.along = along
+        n = len(self.surfaces)
+        self.breaks = [i / n for i in range(n + 1)] if breaks is None else [float(b) for b in breaks]
+        if len(self.breaks) != n + 1 or self.breaks[0] != 0.0 or self.breaks[-1] != 1.0 \
+                or any(b1 <= b0 for b0, b1 in zip(self.breaks, self.breaks[1:])):
+            raise ValueError("breaks must be strictly increasing from 0 to 1, one per seam")
+        self._check_seams(tol)
+
+    def _piece_point(self, i: int, s: float, t: float) -> Point:
+        """Evaluate piece i with s along the sewing direction, t across it."""
+        if self.along == "v":
+            return self.surfaces[i].point_at_parameter(t, s)
+        return self.surfaces[i].point_at_parameter(s, t)
+
+    def _check_seams(self, tol: float) -> None:
+        for i in range(len(self.surfaces) - 1):
+            for t in np.linspace(0.0, 1.0, 7):
+                a = self._piece_point(i, 1.0, float(t)).as_array()
+                b = self._piece_point(i + 1, 0.0, float(t)).as_array()
+                if np.linalg.norm(a - b) > tol:
+                    raise ConstructionError(
+                        f"seam {i}: surfaces disagree by {np.linalg.norm(a - b):.3e} "
+                        f"at t={t:.2f} (tol {tol:g})"
+                    )
+
+    def point_at_parameter(self, u: float, v: float) -> Point:
+        s = float(v if self.along == "v" else u)
+        t = float(u if self.along == "v" else v)
+        i = max(0, min(len(self.surfaces) - 1,
+                       int(np.searchsorted(self.breaks, s, side="right")) - 1))
+        b0, b1 = self.breaks[i], self.breaks[i + 1]
+        return self._piece_point(i, (s - b0) / (b1 - b0), t)
 
 
 if __name__ == "__main__":

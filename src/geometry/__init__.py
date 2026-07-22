@@ -4,7 +4,7 @@ This package is standalone: it depends only on numpy/matplotlib and has no
 knowledge of structural analysis, FEM, or composites. Other projects can
 depend on it for geometry primitives without pulling in ``structures``.
 """
-from geometry.curves import InterpolatedLine, TrimmedCurve
+from geometry.curves import InterpolatedLine, IsoCurve, TrimmedCurve
 from geometry.errors import (
     ConstructionError,
     GeometryError,
@@ -12,7 +12,7 @@ from geometry.errors import (
     ToleranceError,
 )
 from geometry.primitives import Line, Orientation, Plane, Point, Position, Vector
-from geometry.surfaces import GordonPatch, GordonSurface
+from geometry.surfaces import GordonPatch, GordonSurface, SewnSurface, Surface, TrimmedSurface
 
 __all__ = [
     "Point",
@@ -22,7 +22,11 @@ __all__ = [
     "Line",
     "Plane",
     "InterpolatedLine",
+    "IsoCurve",
     "TrimmedCurve",
+    "Surface",
+    "TrimmedSurface",
+    "SewnSurface",
     "GordonPatch",
     "GordonSurface",
     "GeometryError",
