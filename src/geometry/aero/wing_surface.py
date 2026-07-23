@@ -39,12 +39,91 @@ import math
 
 import numpy as np
 
+from scipy.optimize import brentq
+
 from geometry.aero.cst import AirfoilCST
 from geometry.aero.wing_shape import WingShape
 from geometry.curves import InterpolatedLine
 from geometry.mesh import Mesh, mesh_surface
 from geometry.primitives import Point
-from geometry.surfaces import GordonSurface
+from geometry.surfaces import GordonSurface, SewnSurface
+
+
+def find_meeting_points(upper, lower, tol: float = 1e-9
+                        ) -> tuple[float, float, float, float]:
+    """(x_le, y_le, x_te, y_te): where the upper and lower y(x/c) curves MEET.
+
+    The section contour is closed at the actual intersections of the two
+    curves (root-solved near each end). If they do not cross -- common for
+    fitted CSTs, whose y(0) and y(1) are generally not exactly zero -- the
+    curves are welded at the mean of their endpoint values.
+    """
+    def d(x: float) -> float:
+        return float(upper(x)) - float(lower(x))
+
+    def crossing(lo: float, hi: float, reverse: bool) -> float | None:
+        xs = np.linspace(lo, hi, 41)
+        ds = [d(float(x)) for x in xs]
+        rng = range(len(xs) - 2, -1, -1) if reverse else range(len(xs) - 1)
+        for i in rng:
+            if ds[i] == 0.0:
+                return float(xs[i])
+            if ds[i] * ds[i + 1] < 0.0:
+                return float(brentq(d, xs[i], xs[i + 1]))
+        return None
+
+    if abs(d(0.0)) <= tol:
+        x_le, y_le = 0.0, 0.5 * (float(upper(0.0)) + float(lower(0.0)))
+    else:
+        x = crossing(0.0, 0.25, reverse=False)
+        x_le = 0.0 if x is None else x
+        y_le = 0.5 * (float(upper(x_le)) + float(lower(x_le)))
+    if abs(d(1.0)) <= tol:
+        x_te, y_te = 1.0, 0.5 * (float(upper(1.0)) + float(lower(1.0)))
+    else:
+        x = crossing(0.75, 1.0, reverse=True)
+        x_te = 1.0 if x is None else x
+        y_te = 0.5 * (float(upper(x_te)) + float(lower(x_te)))
+    return x_le, y_le, x_te, y_te
+
+
+def build_section_curve(xs, upper, lower, chord: float, twist_rad: float,
+                        span_y: float, *, reference_chord_fraction: float = 0.25,
+                        scale: float = 1.0, ref_offset_x: float = 0.0,
+                        ref_offset_z: float = 0.0, params="arclength",
+                        ) -> tuple[InterpolatedLine, Point, Point, Point]:
+    """Closed TE->LE->TE section curve (LE pinned at u=0.5) from y(x/c) callables.
+
+    The loop is closed at the ACTUAL meeting points of the two curves (see
+    :func:`find_meeting_points`); the shared ``xs`` stations are remapped onto
+    [x_le, x_te]. ``ref_offset_x``/``ref_offset_z`` shift the section's
+    reference point in unscaled chordwise/up coordinates (swept wingtips).
+
+    Returns (profile, le_point, te_point, ref_point).
+    """
+    x_le, y_le, x_te, y_te = find_meeting_points(upper, lower)
+    xr = x_le + (x_te - x_le) * np.asarray(xs, dtype=float)
+    up = [(float(x), float(upper(float(x)))) for x in xr]
+    lo = [(float(x), float(lower(float(x)))) for x in xr]
+    up[0] = lo[0] = (x_le, y_le)
+    up[-1] = lo[-1] = (x_te, y_te)
+    loop2d = up[::-1] + lo[1:]
+
+    cos_t, sin_t = math.cos(twist_rad), math.sin(twist_rad)
+
+    def place(x_c: float, y_c: float) -> Point:
+        x = (x_c - reference_chord_fraction) * chord
+        z = y_c * chord
+        x_r = x * cos_t + z * sin_t + ref_offset_x
+        z_r = -x * sin_t + z * cos_t + ref_offset_z
+        return Point(scale * x_r, scale * span_y, scale * z_r)
+
+    pts3d = [place(x_c, y_c) for x_c, y_c in loop2d]
+    le_idx = len(xr) - 1
+    if isinstance(params, str):  # "arclength"
+        params = WingSurface._arclength_params(pts3d, le_idx)
+    profile = InterpolatedLine(pts3d, params=params)
+    return profile, pts3d[le_idx], pts3d[0], place(reference_chord_fraction, 0.0)
 
 
 class WingSurface:
@@ -93,7 +172,12 @@ class WingSurface:
         self._chord_loop_u = self._chord_fraction_params(self._xs)
 
         self.etas = list(np.linspace(0.0, 1.0, n_sections))
+        self._tol = tol
+        self.tip = None
+        self._skin()
 
+    def _skin(self) -> None:
+        """(Re)build profiles, guides and the Gordon surface from ``self.etas``."""
         self.profiles: list[InterpolatedLine] = []
         le_points: list[Point] = []
         te_points: list[Point] = []
@@ -118,8 +202,37 @@ class WingSurface:
             guides=[self.te_guide, self.le_guide, self.te_guide],
             profile_v_params=self.etas,
             guide_u_params=[0.0, 0.5, 1.0],
-            tol=tol,
+            tol=self._tol,
         )
+
+    def fit_tip(self, tip_class, length: float, **kwargs):
+        """Fit a wingtip cap (e.g. ``HoernerTip``) covering the last ``length``
+        of semispan (WingShape units).
+
+        The cut station is added to the skinning stations first, so the wing
+        surface reproduces the cut section exactly and the seam to the tip is
+        exact. The tip is stored as ``self.tip`` and returned; it is a plain
+        Surface, usable on its own. See also :attr:`tipped_surface`.
+        """
+        eta_cut = 1.0 - float(length) / float(self.wing_shape.semispan)
+        if not any(abs(eta_cut - e) < 1e-12 for e in self.etas):
+            self.etas = sorted([*self.etas, eta_cut])
+            self._skin()
+        self.tip = tip_class(self, length=length, **kwargs)
+        return self.tip
+
+    @property
+    def tipped_surface(self) -> SewnSurface:
+        """The trimmed wing and its tip sewn into one surface (requires fit_tip).
+
+        Global v equals the wing's spanwise fraction: the seam sits at the
+        tip's ``eta_cut``.
+        """
+        if self.tip is None:
+            raise ValueError("no tip fitted; call fit_tip(...) first")
+        eta = self.tip.eta_cut
+        return SewnSurface([self.surface.trimmed(v=(0.0, eta)), self.tip],
+                           along="v", breaks=[0.0, eta, 1.0])
 
     @staticmethod
     def _chord_fraction_params(xs: np.ndarray) -> list[float]:
@@ -160,49 +273,23 @@ class WingSurface:
             params[le_idx:] = np.linspace(0.5, 1.0, len(pts3d) - le_idx)
         return params.tolist()
 
-    def _section_point(
-        self, x_c: float, y_c: float, chord: float, twist_rad: float, span_y: float
-    ) -> Point:
-        """Map a normalized airfoil coordinate (x/c, y/c) to a 3D point.
-
-        The chord-line point at ``reference_chord_fraction`` is placed on the
-        straight reference line (x=0, z=0); twist rotates the section about it.
-        """
-        x = (x_c - self.reference_chord_fraction) * chord
-        z = y_c * chord
-        # Rotate about the reference point (Y axis); positive twist = LE up.
-        cos_t, sin_t = math.cos(twist_rad), math.sin(twist_rad)
-        x_r = x * cos_t + z * sin_t
-        z_r = -x * sin_t + z * cos_t
-        return Point(self.scale * x_r, self.scale * span_y, self.scale * z_r)
-
     def _build_section(self, eta: float) -> tuple[InterpolatedLine, Point, Point, Point]:
-        """Build one section and return (profile, le_point, te_point, reference_point)."""
+        """Build one section and return (profile, le_point, te_point, reference_point).
+
+        The section is closed at the ACTUAL meeting points of the upper and
+        lower airfoil curves (see :func:`find_meeting_points`), so the LE
+        (pinned at u=0.5) is the airfoils' true leading edge.
+        """
         airfoil: AirfoilCST = self.wing_shape.airfoil_distribution(eta)
         chord = float(self.wing_shape.chord_distribution(eta))
         twist_rad = math.radians(float(self.wing_shape.twist_distribution(eta)))
         span_y = eta * self.wing_shape.semispan
-
-        # Sample upper/lower at the shared x/c stations.
-        upper = [(float(xc), airfoil.upper.sample(float(xc))) for xc in self._xs]
-        lower = [(float(xc), airfoil.lower.sample(float(xc))) for xc in self._xs]
-
-        # Loop order: upper TE -> LE (reverse upper), then LE -> lower TE.
-        loop = upper[::-1] + lower[1:]  # drop the duplicated LE point
-        pts3d = [self._section_point(x_c, y_c, chord, twist_rad, span_y) for (x_c, y_c) in loop]
-
-        le_idx = self.n_chord - 1
-        if self.chordwise_spacing == "chord":
-            params = self._chord_loop_u
-        else:  # "arclength"
-            params = self._arclength_params(pts3d, le_idx)
-        profile = InterpolatedLine(pts3d, params=params)
-        le_point = pts3d[le_idx]
-        te_point = pts3d[0]  # upper TE (== lower TE for a sharp trailing edge)
-        ref_point = self._section_point(
-            self.reference_chord_fraction, 0.0, chord, twist_rad, span_y
+        params = self._chord_loop_u if self.chordwise_spacing == "chord" else "arclength"
+        return build_section_curve(
+            self._xs, airfoil.upper.sample, airfoil.lower.sample, chord, twist_rad,
+            span_y, reference_chord_fraction=self.reference_chord_fraction,
+            scale=self.scale, params=params,
         )
-        return profile, le_point, te_point, ref_point
 
     def section_curve(self, eta: float) -> InterpolatedLine:
         """The section profile at eta as a Curve (TE -> LE -> TE, LE at u = 0.5).

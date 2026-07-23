@@ -8,10 +8,13 @@ from geometry.aero.utils import (
 )
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
-from geometry.aero.wingtip import HoernerTip
+from geometry.aero.wingtip import HoernerTip, ParametricTip, WingTip, blend_function
 
 __all__ = [
     "HoernerTip",
+    "ParametricTip",
+    "WingTip",
+    "blend_function",
     "CSTPolynomial",
     "bernstein_poly",
     "cosine_spacing",
