@@ -40,6 +40,21 @@ EDGE_COLOR = "#e8b34b"
 VERTEX_COLOR = "#e06666"
 HISTORY_COLOR = "#b58fd6"
 
+#: Display-mesh quality. ``curvature`` = mesh points per 2*pi of curvature
+#: (gmsh's deflection control: higher = smaller sag against the true surface);
+#: ``max_frac``/``min_frac`` divide the model diagonal into the size bounds.
+#: Set from your script (before ``.show()``) via :func:`set_display_quality`;
+#: the rebuild-on-save loop re-runs the script, so edits apply live.
+DISPLAY_QUALITY = {"curvature": 32.0, "max_frac": 25.0, "min_frac": 400.0}
+
+
+def set_display_quality(curvature: float = 32.0, max_frac: float = 25.0,
+                        min_frac: float = 400.0) -> None:
+    """Tune the display tessellation (higher values = finer everywhere)."""
+    DISPLAY_QUALITY.update(curvature=curvature, max_frac=max_frac,
+                           min_frac=min_frac)
+
+
 _tessellated = False
 _tessellation_error: str | None = None
 
@@ -74,9 +89,9 @@ def _ensure_display_mesh() -> str | None:
                           for dim, tag in gmsh.model.getEntities(2)] or [[0, 0, 0, 1, 1, 1]])
     mins, maxs = bounds[:, :3].min(axis=0), bounds[:, 3:].max(axis=0)
     diag = float(np.linalg.norm(maxs - mins)) or 1.0
-    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 32)
-    gmsh.option.setNumber("Mesh.MeshSizeMax", diag / 25.0)
-    gmsh.option.setNumber("Mesh.MeshSizeMin", diag / 400.0)
+    gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", DISPLAY_QUALITY["curvature"])
+    gmsh.option.setNumber("Mesh.MeshSizeMax", diag / DISPLAY_QUALITY["max_frac"])
+    gmsh.option.setNumber("Mesh.MeshSizeMin", diag / DISPLAY_QUALITY["min_frac"])
     gmsh.option.setNumber("General.Verbosity", 1)
 
     print("viewer: generating display mesh...", file=sys.stderr, flush=True)

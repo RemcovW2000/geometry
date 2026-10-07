@@ -218,3 +218,16 @@ def test_viewer_adapter_builds_topology_tree():
     assert len(face_node["geoms"][0]["indices"]) % 3 == 0
     edges_group = face_node["children"][0]
     assert len(edges_group["children"]) == 4
+
+
+def test_mirrored_solid_works_in_booleans():
+    """Reflected solids must be orientation-healed, or cuts silently no-op."""
+    box = Solid.box(4.0, 2.0, 2.0, corner=Point(-2.0, -1.0, -1.0))
+    tool = Solid.box(1.0, 0.8, 0.8, corner=Point(-0.5, 0.1, -0.4))
+    mirror = tool.mirrored(0, 1, 0, 0)  # lies in y < 0
+    assert mirror.volume > 0.0
+    v0 = box.volume
+    result = cut(box, [tool, mirror])
+    assert not isinstance(result, list)
+    removed = v0 - result.volume
+    assert abs(removed - 2 * 1.0 * 0.8 * 0.8) < 1e-9  # BOTH cuts removed material

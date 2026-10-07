@@ -20,9 +20,8 @@ def split_line_by_planes(
     """
     intersection_us = [0.0]
     for plane in planes:
-        pt = line.plane_intersection_point(plane)[0]
-        u = line.parameter_at_point(pt)
-        intersection_us.append(u)
+        # the intersection's own parameter — no need to recover it from the point
+        intersection_us.append(line.plane_intersection_parameters(plane)[0])
     intersection_us.append(1.0)
 
     trimmed_curves = []
@@ -30,7 +29,7 @@ def split_line_by_planes(
         trimmed_curves.append(TrimmedCurve(base_curve=line, u_start=u_s, u_end=u_e))
 
     re_interpolated_curves = []
+    sample_us = np.linspace(0, 1.0, n_reinterpolation_points)
     for curve in trimmed_curves:
-        pts = [curve.point_at_parameter(u) for u in np.linspace(0, 1.0, n_reinterpolation_points)]
-        re_interpolated_curves.append(InterpolatedLine(pts))
+        re_interpolated_curves.append(InterpolatedLine(curve.points_at_parameters(sample_us)))
     return re_interpolated_curves

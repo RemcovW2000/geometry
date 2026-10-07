@@ -246,8 +246,30 @@ class Shape:
         return result
 
     def mirrored(self, a: float, b: float, c: float, d: float = 0.0) -> Shape:
-        """Return a mirrored copy (the original is untouched)."""
+        """Return a mirrored copy (the original is untouched).
+
+        Reflections invert a solid's orientation, which makes OCC booleans
+        silently ignore it (a cut with an inside-out tool removes nothing).
+        Mirrored solids are therefore healed back to a valid orientation.
+        """
         result = self.copy().mirror(a, b, c, d)
+        if self.dim == 3:  # noqa: PLR2004
+            gmsh = ensure_session()
+            old = result.dimtag
+            healed = gmsh.model.occ.healShapes([old])
+            gmsh.model.occ.synchronize()
+            vols = [t for (dd, t) in healed if dd == 3]  # noqa: PLR2004
+            if vols and vols[0] != old[1]:
+                try:  # healShapes may leave the inverted input behind
+                    gmsh.model.occ.remove([old], recursive=True)
+                    gmsh.model.occ.synchronize()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+                result = Solid(vols[0])
+            if result.volume <= 0.0:
+                print(f"WARNING: mirrored copy of '{self.name}' still has "
+                      f"non-positive volume {result.volume:.3g}; booleans with "
+                      "it will misbehave")
         result.name = f"{self.name}_mirror"
         result.provenance = Operation("mirror", inputs=[self],
                                       params={"plane": (a, b, c, d)})

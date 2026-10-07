@@ -14,6 +14,13 @@ class Curve:
         x, y, z = splev(u, self.tck)
         return Point(x, y, z)
 
+    def points_at_parameters(self, us: list[float] | np.ndarray) -> list[Point]:
+        """Points at many parameters — one spline evaluation instead of one per point."""
+        if not hasattr(self, "tck"):  # curves without a spline (e.g. IsoCurve)
+            return [self.point_at_parameter(float(u)) for u in us]
+        xs, ys, zs = splev(np.asarray(us, dtype=float), self.tck)
+        return [Point(float(x), float(y), float(z)) for x, y, z in zip(xs, ys, zs, strict=True)]
+
     def parameter_at_point(
         self, point: Point, tol: float = 1e-6, n_initial_samples: int = 20
     ) -> float:
@@ -99,7 +106,7 @@ class Curve:
 
         return float(np.clip(u_opt, 0.0, 1.0))
 
-    def plane_intersection_point(
+    def plane_intersection_parameters(
         self,
         plane: Plane,
         u_min: float = 0.0,
@@ -107,36 +114,35 @@ class Curve:
         n_samples: int = 100,
         tol: float = 1e-9,
         max_iter: int = 80,
-    ) -> list[Point]:
-        """Find curve-plane intersections by root finding on the curve parameter.
+    ) -> list[float]:
+        """Parameters u of the curve-plane intersections, ascending.
 
         We solve f(u) = n·(C(u) - p0) = 0 for u in [u_min, u_max].
 
         Algorithm:
-          1) Sample f(u) on a grid of `n_samples`
+          1) Sample f(u) on a grid of `n_samples` (one vectorised spline evaluation)
           2) Detect sign changes (brackets)
           3) Refine each bracket with SciPy's `brentq` (robust bracketed solver)
-          4) Deduplicate roots
-
-        Returns:
-            List of (u, Point) pairs.
 
         Notes:
-            - Requires SciPy (used elsewhere in this repo for splines).
             - Bracketed solvers need a sign change; tangent contacts may be missed
               unless they land near a sample point.
         """
         if u_max <= u_min:
             raise ValueError("u_max must be > u_min")
 
+        normal = plane.normal.as_array()
+        origin = plane.point.as_array()
+
         def f(u: float) -> float:
             return plane.signed_distance(self.point_at_parameter(u))
 
         us = np.linspace(u_min, u_max, n_samples, dtype=float)
-        fs = np.empty(n_samples, dtype=float)
-        for i in range(len(us)):
-            u = float(us[i])
-            fs[i] = f(u)
+        if hasattr(self, "tck"):
+            xyz = np.asarray(splev(us, self.tck), dtype=float)  # (3, n_samples)
+            fs = normal @ (xyz - origin[:, None])
+        else:
+            fs = np.array([f(float(u)) for u in us])
 
         brackets: list[tuple[float, float]] = []
         for i in range(n_samples - 1):
@@ -163,6 +169,19 @@ class Curve:
             roots.append(u_root)
 
         roots.sort()
+        return roots
+
+    def plane_intersection_point(
+        self,
+        plane: Plane,
+        u_min: float = 0.0,
+        u_max: float = 1.0,
+        n_samples: int = 100,
+        tol: float = 1e-9,
+        max_iter: int = 80,
+    ) -> list[Point]:
+        """Curve-plane intersection points (see plane_intersection_parameters), ascending in u."""
+        roots = self.plane_intersection_parameters(plane, u_min, u_max, n_samples, tol, max_iter)
         return [self.point_at_parameter(u) for u in roots]
 
     def transform(self, position: Position) -> "Curve":
@@ -272,6 +291,11 @@ class TrimmedCurve(Curve):
     def point_at_parameter(self, u: float) -> Point:
         """Get point on trimmed curve at parameter u in [0, 1]."""
         return self.base_curve.point_at_parameter(self._to_base_u(u))
+
+    def points_at_parameters(self, us: list[float] | np.ndarray) -> list[Point]:
+        """Points at many trimmed-curve parameters (one base-curve evaluation)."""
+        base_us = self.u_start + np.asarray(us, dtype=float) * (self.u_end - self.u_start)
+        return self.base_curve.points_at_parameters(base_us)
 
     def parameter_at_point(
         self, point: Point, tol: float = 1e-9, n_initial_samples: int = 20

@@ -36,6 +36,11 @@ from geometry.viewer.base import (
     can_view,
     register_adapter,
 )
+try:  # optional, like the adapter registration in base.py
+    from geometry.viewer.gmsh_adapters import set_display_quality
+except ImportError:  # pragma: no cover - gmsh not installed
+    def set_display_quality(*_args, **_kwargs) -> None:  # type: ignore[misc]
+        raise ImportError("set_display_quality requires the gmsh/OCC backend")
 from geometry.viewer.hierarchy import Hierarchy, HierarchyNode
 from geometry.viewer.ids import SceneId
 from geometry.viewer.scene import Scene
@@ -69,6 +74,7 @@ __all__ = [
     "can_view",
     "register_adapter",
     "serve",
+    "set_display_quality",
     "Scene",
     "Hierarchy",
     "HierarchyNode",
