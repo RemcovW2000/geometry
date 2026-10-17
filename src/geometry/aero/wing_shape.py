@@ -1,7 +1,7 @@
 import dataclasses
 from typing import Callable
 
-from geometry.aero.cst import AirfoilCST
+from geometry.aero.airfoil import Airfoil
 
 
 @dataclasses.dataclass
@@ -16,10 +16,10 @@ class WingShape:
         semispan: Wing semispan (m)
         chord_distribution: Returns chord length (m) as function of eta [0, 1]
         twist_distribution: Returns twist angle (deg) as function of eta [0, 1]
-        airfoil_distribution: Returns AirfoilCST as function of eta [0, 1]
+        airfoil_distribution: Returns Airfoil as function of eta [0, 1]
     """
 
     chord_distribution: Callable[[float], float]
     twist_distribution: Callable[[float], float]
-    airfoil_distribution: Callable[[float], AirfoilCST]
+    airfoil_distribution: Callable[[float], Airfoil]
     semispan: float

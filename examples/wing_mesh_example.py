@@ -12,7 +12,8 @@ matplotlib.use("MacOSX")
 import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-from geometry.aero.cst import AirfoilCST, CSTPolynomial
+from geometry.aero.airfoil import Airfoil
+from geometry.aero.cst import CSTPolynomial
 from geometry.aero.utils import elliptic_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
@@ -23,7 +24,7 @@ def main() -> None:
         semispan=1.5,
         chord_distribution=elliptic_distr(0.3),
         twist_distribution=CSTPolynomial([5, 2, 2], shape=lambda eta: 1).get_callable(),
-        airfoil_distribution=lambda eta: AirfoilCST(
+        airfoil_distribution=lambda eta: Airfoil(
             upper=CSTPolynomial(coeffs=[0.3, 0.2, 0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
             lower=CSTPolynomial(coeffs=[-0.3, -0.2, -0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
         ),

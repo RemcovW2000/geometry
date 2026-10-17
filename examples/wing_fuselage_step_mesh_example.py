@@ -21,7 +21,8 @@ import math
 import numpy as np
 
 from geometry import Orientation, Point, Position, Vector
-from geometry.aero.cst import AirfoilCST, CSTPolynomial
+from geometry.aero.airfoil import Airfoil
+from geometry.aero.cst import CSTPolynomial
 from geometry.aero.utils import linear_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
@@ -89,7 +90,7 @@ def build_wing() -> WingSurface:
         semispan=SEMISPAN,
         chord_distribution=linear_distr(ROOT_CHORD, TIP_CHORD),
         twist_distribution=lambda e: 3.0 * (1 - e),
-        airfoil_distribution=lambda e: AirfoilCST(
+        airfoil_distribution=lambda e: Airfoil(
             upper=CSTPolynomial([0.3, 0.2, 0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
             lower=CSTPolynomial([-0.3, -0.2, -0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
         ),

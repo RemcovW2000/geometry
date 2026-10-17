@@ -13,7 +13,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from geometry.aero.cst import AirfoilCST, CSTPolynomial
+from geometry.aero.airfoil import Airfoil
+from geometry.aero.cst import CSTPolynomial
 from geometry.aero.utils import linear_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
@@ -29,7 +30,7 @@ def build_wing() -> WingSurface:
         semispan=1.5,
         chord_distribution=linear_distr(0.3, 0.15),
         twist_distribution=linear_distr(0.0, -3.0),
-        airfoil_distribution=lambda eta: AirfoilCST(
+        airfoil_distribution=lambda eta: Airfoil(
             upper=CSTPolynomial(coeffs=[0.25, 0.2, 0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
             lower=CSTPolynomial(coeffs=[-0.15, -0.05, -0.05], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
         ),

@@ -41,7 +41,7 @@ import numpy as np
 
 from scipy.optimize import brentq
 
-from geometry.aero.cst import AirfoilCST
+from geometry.aero.airfoil import Airfoil
 from geometry.aero.wing_shape import WingShape
 from geometry.curves import InterpolatedLine
 from geometry.mesh import Mesh, mesh_surface
@@ -280,13 +280,13 @@ class WingSurface:
         lower airfoil curves (see :func:`find_meeting_points`), so the LE
         (pinned at u=0.5) is the airfoils' true leading edge.
         """
-        airfoil: AirfoilCST = self.wing_shape.airfoil_distribution(eta)
+        airfoil: Airfoil = self.wing_shape.airfoil_distribution(eta)
         chord = float(self.wing_shape.chord_distribution(eta))
         twist_rad = math.radians(float(self.wing_shape.twist_distribution(eta)))
         span_y = eta * self.wing_shape.semispan
         params = self._chord_loop_u if self.chordwise_spacing == "chord" else "arclength"
         return build_section_curve(
-            self._xs, airfoil.upper.sample, airfoil.lower.sample, chord, twist_rad,
+            self._xs, airfoil.y_upper, airfoil.y_lower, chord, twist_rad,
             span_y, reference_chord_fraction=self.reference_chord_fraction,
             scale=self.scale, params=params,
         )

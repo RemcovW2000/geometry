@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 
 from geometry import Point, Vector
-from geometry.aero.cst import AirfoilCST, CSTPolynomial
+from geometry.aero.airfoil import Airfoil
+from geometry.aero.cst import CSTPolynomial
 from geometry.aero.utils import linear_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
@@ -31,7 +32,7 @@ shape = WingShape(
     semispan=semispan,
     chord_distribution=linear_distr(root_chord, 0.4 * root_chord),
     twist_distribution=lambda eta: 2.0 * (1 - eta),
-    airfoil_distribution=lambda eta: AirfoilCST(
+    airfoil_distribution=lambda eta: Airfoil(
         upper=CSTPolynomial([0.25, 0.18, 0.18], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
         lower=CSTPolynomial([-0.15, -0.10, -0.10], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
     ),

@@ -1,6 +1,8 @@
 import numpy as np
+import pytest
 
-from geometry.aero.cst import AirfoilCST, CSTPolynomial
+from geometry.aero.airfoil import Airfoil
+from geometry.aero.cst import CSTPolynomial
 from geometry.aero.utils import linear_distr
 from geometry.aero.wing_shape import WingShape
 from geometry.aero.wing_surface import WingSurface
@@ -11,7 +13,7 @@ def _wing_shape():
         semispan=1.5,
         chord_distribution=linear_distr(0.3, 0.15),
         twist_distribution=CSTPolynomial([5, 2, 2], shape=lambda eta: 1).get_callable(),
-        airfoil_distribution=lambda eta: AirfoilCST(
+        airfoil_distribution=lambda eta: Airfoil(
             upper=CSTPolynomial(coeffs=[0.3, 0.2, 0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
             lower=CSTPolynomial(coeffs=[-0.3, -0.2, -0.2], shape=lambda u: u**0.5 * (1 - u) ** 1.0),
         ),
@@ -62,7 +64,7 @@ def _varying_airfoil_shape():
     def airfoil(eta):
         t = 0.30 * (1 - eta) + 0.08 * eta  # thick root -> thin tip
         camber = 0.12 * eta  # camber grows toward tip
-        return AirfoilCST(
+        return Airfoil(
             upper=CSTPolynomial(coeffs=[t + camber, 0.7 * t + camber, 0.7 * t + camber],
                                 shape=lambda u: u**0.5 * (1 - u) ** 1.0),
             lower=CSTPolynomial(coeffs=[-t + camber, -0.7 * t + camber, -0.7 * t + camber],
@@ -97,3 +99,19 @@ def test_wing_mesh_quad_counts_and_on_surface():
     for node in mesh.nodes[:: 13]:
         # find closest is overkill; just confirm node came from the surface map
         assert np.isfinite(node.as_array()).all()
+
+
+def test_wing_with_rounded_trailing_edge():
+    shape = lambda u: u**0.5 * (1 - u) ** 1.0
+    airfoil = Airfoil(
+        upper=CSTPolynomial(coeffs=[0.3, 0.2, 0.2], shape=shape),
+        lower=CSTPolynomial(coeffs=[-0.3, -0.2, -0.2], shape=shape),
+        trailing_edge_gap=0.01,
+        rounded_trailing_edge=True,
+    )
+    wing_shape = _wing_shape()
+    wing_shape.airfoil_distribution = lambda eta: airfoil
+    wing = WingSurface(wing_shape, n_sections=4, n_chord=40)
+    te = wing.point_at_parameter(0.0, 0.0).as_array()
+    le = wing.point_at_parameter(0.5, 0.0).as_array()
+    assert np.linalg.norm(te - le) == pytest.approx(0.3, rel=1e-3)  # unit chord kept at the root

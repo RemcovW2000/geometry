@@ -156,8 +156,8 @@ class HoernerTip(WingTip):
     def _setup(self) -> None:
         a = self._root_airfoil
         xs = np.linspace(0.0, 1.0, 101)
-        upper = np.array([float(a.upper.sample(float(x))) for x in xs])
-        camber = np.array([0.5 * (float(a.upper.sample(float(x))) + float(a.lower.sample(float(x))))
+        upper = np.array([float(a.y_upper(float(x))) for x in xs])
+        camber = np.array([0.5 * (float(a.y_upper(float(x))) + float(a.y_lower(float(x))))
                            for x in xs])
         self._raise_dz = float(upper.max() - camber.max())
 
@@ -166,13 +166,13 @@ class HoernerTip(WingTip):
         f = self._f(v)  # 0 at the cut, 1 at the tip
 
         def end(x: float) -> float:
-            return 0.5 * (float(a.upper.sample(x)) + float(a.lower.sample(x))) + dz
+            return 0.5 * (float(a.y_upper(x)) + float(a.y_lower(x))) + dz
 
         def upper(x: float, f=f) -> float:
-            return (1.0 - f) * float(a.upper.sample(x)) + f * end(x)
+            return (1.0 - f) * float(a.y_upper(x)) + f * end(x)
 
         def lower(x: float, f=f) -> float:
-            return (1.0 - f) * float(a.lower.sample(x)) + f * end(x)
+            return (1.0 - f) * float(a.y_lower(x)) + f * end(x)
 
         return upper, lower, self._root_chord, self._root_twist, 0.0, 0.0
 
@@ -228,13 +228,13 @@ class ParametricTip(WingTip):
         twist_rad = (1.0 - f["twist"](v)) * self._root_twist      # zero at the tip
 
         def camber(x: float) -> float:
-            return 0.5 * (float(a.upper.sample(x)) + float(a.lower.sample(x)))
+            return 0.5 * (float(a.y_upper(x)) + float(a.y_lower(x)))
 
         def upper(x: float, tau=tau, gam=gam) -> float:
-            return gam * camber(x) + tau * (float(a.upper.sample(x)) - camber(x))
+            return gam * camber(x) + tau * (float(a.y_upper(x)) - camber(x))
 
         def lower(x: float, tau=tau, gam=gam) -> float:
-            return gam * camber(x) + tau * (float(a.lower.sample(x)) - camber(x))
+            return gam * camber(x) + tau * (float(a.y_lower(x)) - camber(x))
 
         fo = f["offset"](v)
         return upper, lower, chord, twist_rad, self.delta_x * fo, self.delta_z * fo
