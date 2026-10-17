@@ -14,7 +14,7 @@ from scipy.optimize import brentq, minimize_scalar
 from geometry.aero.utils import tanh_density
 
 CURVATURE_FINITE_DIFF_H = 1e-6
-LE_RADIUS_X_OFFSET = 1e-4
+LE_RADIUS_STATIONS = (0.002, 0.004, 0.006)  # x where the nose thickness defines the LE radius
 TE_SEARCH_X = 0.7  # the rounded trailing edge is searched aft of this chord fraction
 TE_CROSS_SLOPE = 0.05  # continuation past the rounded TE, so wing sections find the closure
 
@@ -345,16 +345,14 @@ class Airfoil:
         max_index = np.argmax(thicknesses)
         return xs[max_index], thicknesses[max_index]
 
-    def leading_edge_radius(
-        self, x_offset: float = LE_RADIUS_X_OFFSET, h: float = CURVATURE_FINITE_DIFF_H
-    ) -> float:
-        """Approximate leading edge radius using curvature at x=x_offset."""
-        max_curvature = max(
-            self.upper.curvature_at(x_offset, h=h), self.lower.curvature_at(x_offset, h=h)
-        )
-        if max_curvature == 0.0:  # noqa PLR2004
-            return float("inf")  # Flat leading edge
-        return 1.0 / max_curvature
+    def leading_edge_radius(self, stations: tuple[float, ...] = LE_RADIUS_STATIONS) -> float:
+        """Radius of the LE circle that is as thick as the closed contour near the nose.
+
+        A circle of radius r through the LE is 2 sqrt(2 r x - x^2) thick at x, so the contour
+        thickness t gives r = (t^2 / 4 + x^2) / (2 x); the smallest value over the stations counts.
+        A surface that leaves the LE flat therefore cannot pass as a round nose.
+        """
+        return min((self.thickness_at(x) ** 2 / 4 + x**2) / (2 * x) for x in stations)
 
     def trailing_edge_angle(self) -> float:
         """Included angle between the upper and lower surface at the TE, in degrees."""

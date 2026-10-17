@@ -11,9 +11,8 @@ from typing import Callable
 import numpy as np
 from scipy.optimize import least_squares
 
-from geometry.aero.airfoil import (  # noqa: F401 (the two constants are re-exported)
+from geometry.aero.airfoil import (  # noqa: F401
     CURVATURE_FINITE_DIFF_H,
-    LE_RADIUS_X_OFFSET,
     Airfoil,
     AirfoilCurve,
     parse_selig_dat,
