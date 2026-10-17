@@ -17,6 +17,8 @@ CURVATURE_FINITE_DIFF_H = 1e-6
 LE_RADIUS_STATIONS = (0.002, 0.004, 0.006)  # x where the nose thickness defines the LE radius
 TE_SEARCH_X = 0.7  # the rounded trailing edge is searched aft of this chord fraction
 TE_CROSS_SLOPE = 0.05  # continuation past the rounded TE, so wing sections find the closure
+FLAP_POINTS = 2001  # samples of each deflected flap surface (y(x) is interpolated between them)
+HINGE_ARC_POINTS = 25  # samples of the circular arc on the convex side of a deflected flap
 
 
 class AirfoilCurve:
@@ -173,6 +175,15 @@ class RoundedTrailingEdge(NamedTuple):
     x_tangent_lower: float
 
 
+class Flap(NamedTuple):
+    """Hinge point and the deflected flap surfaces: (x, y) polylines from junction to TE."""
+
+    x_hinge: float
+    y_hinge: float
+    upper: tuple[np.ndarray, np.ndarray]
+    lower: tuple[np.ndarray, np.ndarray]
+
+
 class Airfoil:
     """
     Airfoil defined by an upper and a lower surface curve, both y(x/c) with the LE at x = 0.
@@ -186,6 +197,11 @@ class Airfoil:
         blending 1); `upper` and `lower` stay the closed base shape.
     rounded_trailing_edge : Close the cut TE of a nonzero gap with a circular arc tangent to
         both opened surfaces; the arc ends at x = 1, where the two surfaces meet.
+    flap_chord : Distance from the TE to the flap hinge in chord fractions; the hinge lies
+        halfway between the surfaces at x = 1 - flap_chord.
+    flap_deflection : Flap deflection in degrees, positive down (more lift). The convex side
+        is closed by a circular arc around the hinge, the concave side ends in a sharp corner
+        where the flap meets the fixed part.
     """
 
     def __init__(
@@ -194,45 +210,103 @@ class Airfoil:
         lower: AirfoilCurve,
         trailing_edge_gap: float = 0.0,
         rounded_trailing_edge: bool = False,
+        flap_chord: float = 0.0,
+        flap_deflection: float = 0.0,
     ) -> None:
         self.upper = upper
         self.lower = lower
         self.trailing_edge_gap = trailing_edge_gap
         self.rounded_trailing_edge = rounded_trailing_edge
+        self.flap_chord = flap_chord
+        self.flap_deflection = flap_deflection
         rounded = rounded_trailing_edge and trailing_edge_gap > 0.0
         self.trailing_edge = self._fit_rounded_trailing_edge() if rounded else None
+        self.flap = self._deflect_flap() if flap_chord > 0.0 and flap_deflection != 0.0 else None
 
     def __repr__(self) -> str:
         return (
             f"Airfoil(upper={self.upper!r}, lower={self.lower!r}, "
             f"trailing_edge_gap={self.trailing_edge_gap!r}, "
-            f"rounded_trailing_edge={self.rounded_trailing_edge!r})"
+            f"rounded_trailing_edge={self.rounded_trailing_edge!r}, "
+            f"flap_chord={self.flap_chord!r}, flap_deflection={self.flap_deflection!r})"
         )
 
     @classmethod
-    def from_dat(
-        cls,
-        path: Path | str,
-        kind: str = "linear",
-        trailing_edge_gap: float = 0.0,
-        rounded_trailing_edge: bool = False,
-    ) -> Airfoil:
-        """Airfoil interpolated on the points of a Selig-style .dat file (TE -> LE -> TE)."""
+    def from_dat(cls, path: Path | str, kind: str = "linear", **kwargs: float | bool) -> Airfoil:
+        """Airfoil interpolated on the points of a Selig-style .dat file (TE -> LE -> TE).
+
+        Keyword arguments (TE gap, rounding, flap) are passed on to `Airfoil`.
+        """
         upper, lower = parse_selig_dat(Path(path))
         return cls(
             InterpolatedAirfoilCurve(*zip(*upper), kind=kind),
             InterpolatedAirfoilCurve(*zip(*lower), kind=kind),
-            trailing_edge_gap,
-            rounded_trailing_edge,
+            **kwargs,
         )
 
     def y_upper(self, x: float | np.ndarray) -> float | np.ndarray:
-        """Upper surface y at x, TE gap (and rounding) included."""
-        return self._surface(self.upper, 1.0, x)
+        """Upper surface y at x, TE gap, rounding and flap included."""
+        return self._with_flap(self._surface(self.upper, 1.0, x), x, self.flap and self.flap.upper)
 
     def y_lower(self, x: float | np.ndarray) -> float | np.ndarray:
-        """Lower surface y at x, TE gap (and rounding) included."""
-        return self._surface(self.lower, -1.0, x)
+        """Lower surface y at x, TE gap, rounding and flap included."""
+        return self._with_flap(self._surface(self.lower, -1.0, x), x, self.flap and self.flap.lower)
+
+    @staticmethod
+    def _with_flap(
+        y: float | np.ndarray, x: float | np.ndarray, polyline: tuple | None
+    ) -> float | np.ndarray:
+        if not polyline:
+            return y
+        xs, ys = polyline
+        y = np.where(np.asarray(x) < xs[0], y, np.interp(x, xs, ys))
+        return float(y) if np.ndim(x) == 0 else y
+
+    def _deflect_flap(self) -> Flap:
+        """Rotate the part aft of the hinge about the hinge, then close both sides."""
+        x_h = 1.0 - self.flap_chord
+        y_h = 0.5 * (self._surface(self.upper, 1.0, x_h) + self._surface(self.lower, -1.0, x_h))
+        d = math.radians(self.flap_deflection)
+        cos_d, sin_d = math.cos(d), math.sin(d)
+
+        def rotate(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            dx, dy = x - x_h, y - y_h
+            return x_h + dx * cos_d + dy * sin_d, y_h - dx * sin_d + dy * cos_d
+
+        xs = np.linspace(x_h, 1.0, FLAP_POINTS)
+        upper = rotate(xs, self._surface(self.upper, 1.0, xs))
+        lower = rotate(xs, self._surface(self.lower, -1.0, xs))
+        if self.trailing_edge_gap == 0.0 or self.trailing_edge is not None:
+            # closed TE: the surfaces now meet at the aftmost point of the rotated contour
+            cx, cy = np.r_[upper[0], lower[0][-2::-1]], np.r_[upper[1], lower[1][-2::-1]]
+            k = int(np.argmax(cx))
+            upper, lower = (cx[: k + 1], cy[: k + 1]), (cx[k:][::-1], cy[k:][::-1])
+
+        sign = 1.0 if d > 0 else -1.0  # the convex side: upper for a downward deflection
+        r = 0.5 * float(self._surface(self.upper, 1.0, x_h) - self._surface(self.lower, -1.0, x_h))
+        phi = np.linspace(0.0, d, HINGE_ARC_POINTS)[:-1]
+        convex = upper if d > 0 else lower
+        convex = (
+            np.r_[x_h + sign * r * np.sin(phi), convex[0]],
+            np.r_[y_h + sign * r * np.cos(phi), convex[1]],
+        )
+        concave_curve, concave_sign = (self.lower, -1.0) if d > 0 else (self.upper, 1.0)
+        xr, yr = lower if d > 0 else upper
+        # the flap surface starts inside the fixed part and leaves it where it crosses that surface
+        outside = concave_sign * (
+            yr - self._surface(concave_curve, concave_sign, np.minimum(xr, 1.0))
+        )
+        k = int(np.argmax(outside > 0.0))
+        if k == 0:
+            raise ValueError("the deflected flap surface does not cross the fixed surface")
+        w = outside[k - 1] / (outside[k - 1] - outside[k])  # linear interpolation of the corner
+        x_i = xr[k - 1] + w * (xr[k] - xr[k - 1])
+        y_i = float(self._surface(concave_curve, concave_sign, x_i))
+        concave = (np.r_[x_i, xr[k:]], np.r_[y_i, yr[k:]])
+        new_upper, new_lower = (convex, concave) if d > 0 else (concave, convex)
+        if not all(np.all(np.diff(p[0]) > 0.0) for p in (new_upper, new_lower)):
+            raise ValueError("flap deflection too large: a surface is no longer a function y(x)")
+        return Flap(x_h, y_h, new_upper, new_lower)
 
     def _opened(
         self, curve: AirfoilCurve, sign: float, x: float | np.ndarray
@@ -294,6 +368,13 @@ class Airfoil:
         """Get upper and lower surface coordinates (LE -> TE lists of (x, y) per surface)."""
         xs_upper = np.asarray(self.upper.hybrid_spacing(n_points, p=tanh_p_sampling))
         xs_lower = np.asarray(self.lower.hybrid_spacing(n_points, p=tanh_p_sampling))
+        if self.flap is not None:  # up to the deflected TE, plus the hinge arc and the corner
+            xs_upper = np.union1d(
+                xs_upper * self.flap.upper[0][-1], self.flap.upper[0][:HINGE_ARC_POINTS]
+            )
+            xs_lower = np.union1d(
+                xs_lower * self.flap.lower[0][-1], self.flap.lower[0][:HINGE_ARC_POINTS]
+            )
         ys_upper = np.asarray(self.y_upper(xs_upper), dtype=float)
         ys_lower = np.asarray(self.y_lower(xs_lower), dtype=float)
         upper_pts = list(zip(xs_upper.tolist(), ys_upper.tolist(), strict=True))
