@@ -11,12 +11,7 @@ from typing import Callable
 import numpy as np
 from scipy.optimize import least_squares
 
-from geometry.aero.airfoil import (  # noqa: F401
-    CURVATURE_FINITE_DIFF_H,
-    Airfoil,
-    AirfoilCurve,
-    parse_selig_dat,
-)
+from geometry.aero.airfoil import Airfoil, AirfoilCurve, parse_selig_dat
 from geometry.aero.utils import (
     ReprCallable,
     bernstein_poly,
@@ -26,7 +21,6 @@ from geometry.aero.utils import (
 STANDARD_CST_SHAPE = ReprCallable(lambda _: 1, repr_str="lambda _: 1")
 STANDARD_CST_X_MAPPING = ReprCallable(lambda x: x, repr_str="lambda x: x")
 NUMERICAL_TOL = 1e-12
-AirfoilCST = Airfoil  # old name, kept until the thesis code uses Airfoil
 
 
 def _apply_elementwise(fn: Callable, xs: np.ndarray) -> np.ndarray:
