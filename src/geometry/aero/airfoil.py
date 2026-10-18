@@ -292,7 +292,11 @@ class Airfoil:
         )
         concave_curve, concave_sign = (self.lower, -1.0) if d > 0 else (self.upper, 1.0)
         xr, yr = lower if d > 0 else upper
-        # the flap surface starts inside the fixed part and leaves it where it crosses that surface
+        # the rotated surface leaves the fixed part where it crosses that surface; extended ahead of
+        # the hinge, as a concave surface still diverging there starts outside at the hinge
+        x_ext = np.linspace(max(x_h - self.flap_chord, 0.0), x_h, FLAP_POINTS)[:-1]
+        xe, ye = rotate(x_ext, self._surface(concave_curve, concave_sign, x_ext))
+        xr, yr = np.r_[xe, xr], np.r_[ye, yr]
         outside = concave_sign * (
             yr - self._surface(concave_curve, concave_sign, np.minimum(xr, 1.0))
         )
