@@ -1,6 +1,6 @@
 """Airfoil parametrisation using CST and related methods."""
 from geometry.aero.airfoil import Airfoil, AirfoilCurve, InterpolatedAirfoilCurve
-from geometry.aero.cst import CSTPolynomial
+from geometry.aero.cst import CSTBasis, CSTPolynomial
 from geometry.aero.utils import (
     bernstein_poly,
     cosine_spacing,
@@ -19,6 +19,7 @@ __all__ = [
     "ParametricTip",
     "WingTip",
     "blend_function",
+    "CSTBasis",
     "CSTPolynomial",
     "bernstein_poly",
     "cosine_spacing",
