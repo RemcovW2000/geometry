@@ -19,6 +19,7 @@ TE_SEARCH_X = 0.7  # the rounded trailing edge is searched aft of this chord fra
 TE_CROSS_SLOPE = 0.05  # continuation past the rounded TE, so wing sections find the closure
 FLAP_POINTS = 2001  # samples of each deflected flap surface (y(x) is interpolated between them)
 HINGE_ARC_POINTS = 25  # samples of the circular arc on the convex side of a deflected flap
+CLOSED_TE_TOL = 1e-8  # surfaces closer than this at x = 1 meet there: a closed trailing edge
 
 
 class AirfoilCurve:
@@ -201,7 +202,8 @@ class Airfoil:
         halfway between the surfaces at x = 1 - flap_chord.
     flap_deflection : Flap deflection in degrees, positive down (more lift). The convex side
         is closed by a circular arc around the hinge, the concave side ends in a sharp corner
-        where the flap meets the fixed part.
+        where the flap meets the fixed part. A closed TE (the surfaces meet at x = 1) stays
+        closed; an open one (the gap, or the surfaces' own thickness there) keeps its thickness.
     """
 
     def __init__(
@@ -246,11 +248,13 @@ class Airfoil:
 
     def y_upper(self, x: float | np.ndarray) -> float | np.ndarray:
         """Upper surface y at x, TE gap, rounding and flap included."""
-        return self._with_flap(self._surface(self.upper, 1.0, x), x, self.flap and self.flap.upper)
+        fixed = self._surface(self.upper, 1.0, np.minimum(x, 1.0))
+        return self._with_flap(fixed, x, self.flap and self.flap.upper)
 
     def y_lower(self, x: float | np.ndarray) -> float | np.ndarray:
         """Lower surface y at x, TE gap, rounding and flap included."""
-        return self._with_flap(self._surface(self.lower, -1.0, x), x, self.flap and self.flap.lower)
+        fixed = self._surface(self.lower, -1.0, np.minimum(x, 1.0))
+        return self._with_flap(fixed, x, self.flap and self.flap.lower)
 
     @staticmethod
     def _with_flap(
@@ -274,9 +278,9 @@ class Airfoil:
             return x_h + dx * cos_d + dy * sin_d, y_h - dx * sin_d + dy * cos_d
 
         xs = np.linspace(x_h, 1.0, FLAP_POINTS)
-        upper = rotate(xs, self._surface(self.upper, 1.0, xs))
-        lower = rotate(xs, self._surface(self.lower, -1.0, xs))
-        if self.trailing_edge_gap == 0.0 or self.trailing_edge is not None:
+        y_upper, y_lower = self._surface(self.upper, 1.0, xs), self._surface(self.lower, -1.0, xs)
+        upper, lower = rotate(xs, y_upper), rotate(xs, y_lower)
+        if abs(y_upper[-1] - y_lower[-1]) <= CLOSED_TE_TOL:
             # closed TE: the surfaces now meet at the aftmost point of the rotated contour
             cx, cy = np.r_[upper[0], lower[0][-2::-1]], np.r_[upper[1], lower[1][-2::-1]]
             k = int(np.argmax(cx))

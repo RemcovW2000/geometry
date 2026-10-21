@@ -45,6 +45,11 @@ def test_airfoil_from_selig_dat_reproduces_the_airfoil(tmp_path):
     np.testing.assert_allclose(airfoil.y_lower(xs), cst.y_lower(xs), atol=1e-5)
 
 
+def test_coordinates_run_from_the_leading_to_the_trailing_edge():
+    for surface in _cst_airfoil().coordinates(n_points=100, tanh_p_sampling=0.8):
+        assert surface[0][0] == 0.0 and surface[-1][0] == 1.0
+
+
 def test_trailing_edge_gap():
     closed, opened = _cst_airfoil(), _cst_airfoil(trailing_edge_gap=0.01)
     assert closed.thickness_at(1.0) == pytest.approx(0.0, abs=1e-12)
@@ -124,3 +129,35 @@ def test_flap_on_a_surface_still_diverging_at_the_hinge():
     x_corner, y_corner = flap.lower[0][0], flap.lower[1][0]
     assert x_corner < 0.8 and y_corner == pytest.approx(plain.y_lower(x_corner))
     assert all(np.all(np.diff(p[0]) > 0.0) for p in (flap.upper, flap.lower))
+
+
+def test_flap_trailing_edge_aft_of_the_chord():
+    # cambered: deflected up about a hinge above it, the trailing edge ends aft of x = 1
+    shape = create_cst_class_function()
+    upper = CSTPolynomial([0.2, 0.25, 0.25, 0.25, 0.2], shape=shape)
+    lower = CSTPolynomial([-0.1, 0.0, 0.05, 0.1, 0.1], shape=shape)
+    up = Airfoil(upper, lower, trailing_edge_gap=0.01, flap_chord=0.2, flap_deflection=-10.0)
+    te = (up.flap.upper[0][-1], up.flap.upper[1][-1])
+    assert te[0] > 1.0
+    upper_points, _ = up.coordinates(n_points=100, tanh_p_sampling=0.8)
+    assert upper_points[-1] == pytest.approx(te)
+
+
+def test_flap_keeps_an_open_trailing_edge_open():
+    # a blunt TE in the surfaces themselves (no gap added) stays open, like an added gap
+    opened = _cst_airfoil(trailing_edge_gap=0.004)
+    xs = 0.5 * (1.0 - np.cos(np.linspace(0.0, math.pi, 201)))
+    upper = InterpolatedAirfoilCurve(xs, opened.y_upper(xs), kind="cubic")
+    lower = InterpolatedAirfoilCurve(xs, opened.y_lower(xs), kind="cubic")
+    flap = {"flap_chord": 0.2, "flap_deflection": 20.0}
+    own = Airfoil(upper, lower, **flap).flap
+    added = Airfoil(opened.upper, opened.lower, trailing_edge_gap=0.004, **flap).flap
+    for f in (own, added):
+        te_upper, te_lower = (f.upper[0][-1], f.upper[1][-1]), (f.lower[0][-1], f.lower[1][-1])
+        assert math.dist(te_upper, te_lower) == pytest.approx(0.004)
+    assert own.lower[0][-1] == pytest.approx(added.lower[0][-1])
+    assert own.lower[1][-1] == pytest.approx(added.lower[1][-1], abs=1e-6)
+    rounded = Airfoil(
+        opened.upper, opened.lower, trailing_edge_gap=0.01, rounded_trailing_edge=True, **flap
+    )
+    assert rounded.flap.upper[0][-1] == rounded.flap.lower[0][-1]  # a rounded TE stays closed
