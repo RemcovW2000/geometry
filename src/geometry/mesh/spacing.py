@@ -4,6 +4,7 @@ Pure 1-D spacing generators used to place interior nodes along an edge/curve.
 They return interior parameter values (excluding the two endpoints).
 """
 import math
+from itertools import accumulate
 from typing import Optional
 
 
@@ -191,7 +192,8 @@ def nodes_spacing_start_end_refinement(  # Noqa PLR0912
 
     When refinement zones are long enough to touch, there is no uniform middle body.
     Instead, the two progressions are merged at the index where their spacing values
-    are closest.
+    are closest. In both cases the spacings are stretched to fill the range exactly, so
+    a remainder never becomes a sliver interval of its own.
 
     Args:
         spacing: Target uniform spacing in the middle region.
@@ -221,6 +223,11 @@ def nodes_spacing_start_end_refinement(  # Noqa PLR0912
         ratio = (coarse / fine) ** (1.0 / (n - 1))
         return [fine * ratio**i for i in range(n)]
 
+    def _nodes(spacings: list[float]) -> list[float]:
+        """Interior nodes of consecutive spacings, stretched to fill the range."""
+        scale = span / sum(spacings) if spacings else 1.0
+        return [start + scale * position for position in accumulate(spacings[:-1])]
+
     start_spacings = (
         _refinement_spacings(start_refinement, spacing) if start_refinement is not None else []
     )
@@ -233,17 +240,8 @@ def nodes_spacing_start_end_refinement(  # Noqa PLR0912
     if middle_width >= 0.0:  # noqa PLR2004
         # Zones don't touch — fill middle with uniform spacing
         n_middle = round(middle_width / spacing)
-        if middle_width > 1e-10 and n_middle == 0:  # noqa: PLR2004
-            n_middle = 1
         middle_spacings = [middle_width / n_middle] * n_middle if n_middle > 0 else []
-        all_spacings = start_spacings + middle_spacings + list(reversed(end_spacings))
-
-        nodes = []
-        cumulative = 0.0
-        for s in all_spacings[:-1]:
-            cumulative += s
-            nodes.append(start + cumulative)
-        return nodes
+        return _nodes(start_spacings + middle_spacings + list(reversed(end_spacings)))
 
     # Overlap case — find the merge point where spacing values are closest
     # Enumerate how many spacings to take from start (i) and find the maximum
@@ -278,19 +276,4 @@ def nodes_spacing_start_end_refinement(  # Noqa PLR0912
         # Only end refinement fits (or nothing), just take what fits from each side
         best_i = 0
 
-    # Build interior nodes from the start side (left to right)
-    start_nodes: list[float] = []
-    cum = 0.0
-    for k in range(best_i):
-        cum += start_spacings[k]
-        start_nodes.append(start + cum)
-
-    # Build interior nodes from the end side (right to left, then sort ascending)
-    end_nodes: list[float] = []
-    cum = 0.0
-    for k in range(best_j):
-        cum += end_spacings[k]
-        end_nodes.append(end - cum)
-    end_nodes.reverse()
-
-    return start_nodes + end_nodes
+    return _nodes(start_spacings[:best_i] + list(reversed(end_spacings[:best_j])))
